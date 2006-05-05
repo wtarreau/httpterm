@@ -122,12 +122,16 @@
  * of headers accepted is 8192 bytes, which is in line with Apache's limits.
  */
 #ifndef BUFSIZE
-#define BUFSIZE		16384
+#define BUFSIZE		4096
 #endif
 
 // reserved buffer space for header rewriting
 #ifndef MAXREWRITE
-#define MAXREWRITE	(BUFSIZE / 2)
+#define MAXREWRITE	0
+#endif
+
+#ifndef RESPSIZE
+#define RESPSIZE	1048576
 #endif
 
 #define REQURI_LEN	1024
@@ -584,6 +588,7 @@ struct session {
     int flags;				/* some flags describing the session */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
+    unsigned long to_write;		/* #of response data bytes to write after headers */
     struct sockaddr_storage cli_addr;	/* the client address */
     struct sockaddr_in srv_addr;	/* the address to connect to */
     struct server *srv;			/* the server being used */
@@ -783,7 +788,7 @@ static fd_set *PrevReadEvent = NULL, *PrevWriteEvent = NULL;
 static regmatch_t pmatch[MAX_MATCH];  /* rm_so, rm_eo for regular expressions */
 /* this is used to drain data, and as a temporary buffer for sprintf()... */
 static char trash[BUFSIZE];
-static char common_response[BUFSIZE];
+static char common_response[RESPSIZE];
 
 const int zero = 0;
 const int one = 1;
@@ -2681,6 +2686,7 @@ int event_cli_write(int fd) {
     struct task *t = fdtab[fd].owner;
     struct session *s = t->context;
     struct buffer *b = s->rep;
+    char *data_ptr;
     int ret, max;
 
 #ifdef DEBUG_FULL
@@ -2689,7 +2695,6 @@ int event_cli_write(int fd) {
 
     if (b->l == 0) { /* let's realign the buffer to optimize I/O */
 	b->r = b->w = b->h = b->lr  = b->data;
-	//	max = BUFSIZE;		BUG !!!!
 	max = 0;
     }
     else if (b->r > b->w) {
@@ -2699,12 +2704,20 @@ int event_cli_write(int fd) {
 	max = b->data + BUFSIZE - b->w;
     
     if (fdtab[fd].state != FD_STERROR) {
+	data_ptr = b->w;
 	if (max == 0) {
-	    s->res_cw = RES_NULL;
-	    task_wakeup(&rq, t);
-	    tv_eternity(&s->cwexpire);
-	    FD_CLR(fd, StaticWriteEvent);
-	    return 0;
+	    if (s->to_write > 0) {
+		data_ptr = common_response;
+		max = sizeof(common_response);
+		if (max > s->to_write)
+		    max = s->to_write;
+	    } else {
+		s->res_cw = RES_NULL;
+		task_wakeup(&rq, t);
+		tv_eternity(&s->cwexpire);
+		FD_CLR(fd, StaticWriteEvent);
+		return 0;
+	    }
 	}
 
 #ifndef MSG_NOSIGNAL
@@ -2716,21 +2729,27 @@ int event_cli_write(int fd) {
 	    if (skerr)
 		ret = -1;
 	    else
-		ret = send(fd, b->w, max, MSG_DONTWAIT);
+		ret = send(fd, data_ptr, max, MSG_DONTWAIT);
 	}
 #else
-	ret = send(fd, b->w, max, MSG_DONTWAIT | MSG_NOSIGNAL);
+	ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL);
 #endif
 
 	if (ret > 0) {
-	    b->l -= ret;
-	    b->w += ret;
+	    if (b->l > 0) {
+		/* we were working on "standard" data */
+		b->l -= ret;
+		b->w += ret;
+	    
+		if (b->w == b->data + BUFSIZE) {
+		    b->w = b->data; /* wrap around the buffer */
+		}
+	    } else {
+		/* we were working on dummy data */
+		s->to_write -= ret;
+	    }
 	    
 	    s->res_cw = RES_DATA;
-	    
-	    if (b->w == b->data + BUFSIZE) {
-		b->w = b->data; /* wrap around the buffer */
-	    }
 	}
 	else if (ret == 0) {
 	    /* nothing written, just make as if we were never called */
@@ -4324,7 +4343,7 @@ int process_cli(struct session *t) {
 	    return 1;
 	}	
 	/* last server read and buffer empty */
-	else if ((s == SV_STSHUTR || s == SV_STCLOSE) && (rep->l == 0)) {
+	else if ((s == SV_STSHUTR || s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
 	    FD_CLR(t->cli_fd, StaticWriteEvent);
 	    tv_eternity(&t->cwexpire);
 	    shutdown(t->cli_fd, SHUT_WR);
@@ -4393,7 +4412,7 @@ int process_cli(struct session *t) {
 	    }
 	}
 
-	if ((rep->l == 0) ||
+	if ((rep->l == 0 && t->to_write == 0) ||
 	    ((s < SV_STDATA) /* FIXME: this may be optimized && (rep->w == rep->h)*/)) {
 	    if (FD_ISSET(t->cli_fd, StaticWriteEvent)) {
 		FD_CLR(t->cli_fd, StaticWriteEvent); /* stop writing */
@@ -4426,7 +4445,7 @@ int process_cli(struct session *t) {
 		t->flags |= SN_FINST_D;
 	    return 1;
 	}
-	else if ((s == SV_STSHUTR || s == SV_STCLOSE) && (rep->l == 0)) {
+	else if ((s == SV_STSHUTR || s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
 	    tv_eternity(&t->cwexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
@@ -4442,7 +4461,7 @@ int process_cli(struct session *t) {
 		t->flags |= SN_FINST_D;
 	    return 1;
 	}
-	else if ((rep->l == 0) ||
+	else if ((rep->l == 0 && t->to_write == 0) ||
 		 ((s == SV_STHEADERS) /* FIXME: this may be optimized && (rep->w == rep->h)*/)) {
 	    if (FD_ISSET(t->cli_fd, StaticWriteEvent)) {
 		FD_CLR(t->cli_fd, StaticWriteEvent); /* stop writing */
@@ -4551,12 +4570,11 @@ void srv_close_with_err(struct session *t, int err, int finst, int status, int m
  * returned.
  */
 void srv_return_page(struct session *t, int err, int finst) {
-    int hlen, len;
+    int hlen;
     struct server *srv;
 
     t->srv_state = SV_STCLOSE;
     srv = t->srv;
-    len = srv->resp_size;
 
     t->logs.status = srv->resp_code;
     hlen = sprintf(t->rep->data,
@@ -4567,16 +4585,12 @@ void srv_return_page(struct session *t, int err, int finst) {
 		   "\r\n",
 		   srv->resp_code,
 		   srv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
-		   srv->id, srv->resp_code, len, srv->resp_time, srv->resp_cache);
-    if (hlen > BUFSIZE)
-	len = 0;
-    else if (hlen + len > BUFSIZE)
-	len = BUFSIZE - hlen;
-    if (len)
-	strncpy(t->rep->data + hlen, common_response, len);
-    t->rep->l = hlen + len;
+		   srv->id, srv->resp_code, srv->resp_size, srv->resp_time, srv->resp_cache);
+
+    t->to_write = srv->resp_size;
+    t->rep->l = hlen;
     t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
-    t->rep->r += hlen + len;
+    t->rep->r += hlen;
     t->req->l = 0;
     if (!(t->flags & SN_ERR_MASK))
 	t->flags |= err;
