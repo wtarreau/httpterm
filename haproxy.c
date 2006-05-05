@@ -1,4 +1,7 @@
 /*
+ * HTTPTerm : HTTP termination for benchmarks.
+ * Initial code extracted from HAProxy, copyright below.
+ *
  * HA-Proxy : High Availability-enabled HTTP/TCP proxy
  * 2000-2006 - Willy Tarreau - willy AT meta-x DOT org.
  *
@@ -89,11 +92,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HAPROXY_VERSION
-#define HAPROXY_VERSION "1.2.12"
+#define HAPROXY_VERSION "1.0.0"
 #endif
 
 #ifndef HAPROXY_DATE
-#define HAPROXY_DATE	"2006/04/15"
+#define HAPROXY_DATE	"2006/05/05"
 #endif
 
 /* this is for libc5 for example */
@@ -545,6 +548,10 @@ struct server {
     unsigned int cum_sess;		/* cumulated number of sessions really sent to this server */
     unsigned int maxconn;		/* max # of active sessions. 0 = unlimited. */
     struct proxy *proxy;		/* the proxy this server belongs to */
+    int resp_time;			/* expected response time in milliseconds */
+    int resp_code;			/* expected response code */
+    int resp_size;			/* expected response size in bytes */
+    int resp_cache;			/* expected cacheability (0=no, 1=yes) */
 };
 
 /* The base for all tasks */
@@ -776,6 +783,7 @@ static fd_set *PrevReadEvent = NULL, *PrevWriteEvent = NULL;
 static regmatch_t pmatch[MAX_MATCH];  /* rm_so, rm_eo for regular expressions */
 /* this is used to drain data, and as a temporary buffer for sprintf()... */
 static char trash[BUFSIZE];
+static char common_response[BUFSIZE];
 
 const int zero = 0;
 const int one = 1;
@@ -4538,6 +4546,44 @@ void srv_close_with_err(struct session *t, int err, int finst, int status, int m
 	t->flags |= finst;
 }
 
+/* This function turns the server state into the SV_STCLOSE, and sets
+ * indicators accordingly. Note that if <status> is 0, no message is
+ * returned.
+ */
+void srv_return_page(struct session *t, int err, int finst) {
+    int hlen, len;
+    struct server *srv;
+
+    t->srv_state = SV_STCLOSE;
+    srv = t->srv;
+    len = srv->resp_size;
+
+    t->logs.status = srv->resp_code;
+    hlen = sprintf(t->rep->data,
+		   "HTTP/1.0 %03d\r\n"
+		   "Connection: close\r\n"
+		   "%s"
+		   "X-params: id=%s, code=%d, size=%d, time=%d, cache=%d\r\n"
+		   "\r\n",
+		   srv->resp_code,
+		   srv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
+		   srv->id, srv->resp_code, len, srv->resp_time, srv->resp_cache);
+    if (hlen > BUFSIZE)
+	len = 0;
+    else if (hlen + len > BUFSIZE)
+	len = BUFSIZE - hlen;
+    if (len)
+	strncpy(t->rep->data + hlen, common_response, len);
+    t->rep->l = hlen + len;
+    t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
+    t->rep->r += hlen + len;
+    t->req->l = 0;
+    if (!(t->flags & SN_ERR_MASK))
+	t->flags |= err;
+    if (!(t->flags & SN_FINST_MASK))
+	t->flags |= finst;
+}
+
 /*
  * This function checks the retry count during the connect() job.
  * It updates the session's srv_state and retries, so that the caller knows
@@ -4699,133 +4745,40 @@ int process_srv(struct session *t) {
 		 (c == CL_STSHUTR && t->req->l == 0)) { /* give up */
 	    tv_eternity(&t->cnexpire);
 	    srv_close_with_err(t, SN_ERR_CLICL, SN_FINST_C, 0, 0, NULL);
-
-	    /* it might be possible that we have been granted an access to the
-	     * server while waiting for a free slot. Since we'll never use it,
-	     * we have to pass it on to another session.
-	     */
-	    if (t->srv)
-		offer_connection_slot(t->srv, t->proxy);
 	    return 1;
 	}
 	else {
-	    /* Right now, we will need to create a connection to the server.
-	     * We might already have tried, and got a connection pending, in
-	     * which case we will not do anything till it's pending. It's up
-	     * to any other session to release it and wake us up again.
-	     */
-	    if (t->pend_pos) {
-		if (tv_cmp2_ms(&t->cnexpire, &now) > 0)
-		    return 0;
-		else {
-		    /* we've been waiting too long here */
-		    tv_eternity(&t->cnexpire);
-		    srv_close_with_err(t, SN_ERR_SRVTO, SN_FINST_C,
-				       503, t->proxy->errmsg.len503, t->proxy->errmsg.msg503);
-		    return 1;
-		}
-	    }
+	    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
+	    assign_server(t);
+	    if (t->srv->resp_time == 0)
+		goto immediate_response;
 
-	    do {
-		/* first, get a connection */
-		if (srv_redispatch_connect(t))
-		    return t->srv_state != SV_STIDLE;
+	    t->flags |= SN_ADDR_SET;
+	    t->srv->cur_sess++;
 
-		/* try to (re-)connect to the server, and fail if we expire the
-		 * number of retries.
-		 */
-		if (srv_retryable_connect(t)) {
-		    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
-		    return t->srv_state != SV_STIDLE;
-		}
-
-	    } while (1);
-	}
-    }
-    else if (s == SV_STCONN) { /* connection in progress */
-	if (t->res_sw == RES_SILENT && tv_cmp2_ms(&t->cnexpire, &now) > 0) {
-	    //fprintf(stderr,"1: c=%d, s=%d, now=%d.%06d, exp=%d.%06d\n", c, s, now.tv_sec, now.tv_usec, t->cnexpire.tv_sec, t->cnexpire.tv_usec);
-	    return 0; /* nothing changed */
-	}
-	else if (t->res_sw == RES_SILENT || t->res_sw == RES_ERROR) {
-	    /* timeout, asynchronous connect error or first write error */
-	    //fprintf(stderr,"2: c=%d, s=%d\n", c, s);
-
-	    fd_delete(t->srv_fd);
-	    if (t->srv)
-		t->srv->cur_sess--;
-
-	    if (t->res_sw == RES_SILENT)
-		conn_err = SN_ERR_SRVTO; // it was a connect timeout.
-	    else
-		conn_err = SN_ERR_SRVCL; // it was an asynchronous connect error.
-
-	    /* ensure that we have enough retries left */
-	    if (srv_count_retry_down(t, conn_err))
-		return 1;
-
-	    do {
-		/* Now we will try to either reconnect to the same server or
-		 * connect to another server. If the connection gets queued
-		 * because all servers are saturated, then we will go back to
-		 * the SV_STIDLE state.
-		 */
-		if (srv_retryable_connect(t)) {
-		    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
-		    return t->srv_state != SV_STCONN;
-		}
-
-		/* we need to redispatch the connection to another server */
-		if (srv_redispatch_connect(t))
-		    return t->srv_state != SV_STCONN;
-	    } while (1);
-	}
-	else { /* no error or write 0 */
-	    t->logs.t_connect = tv_diff(&t->logs.tv_accept, &now);
-
-	    //fprintf(stderr,"3: c=%d, s=%d\n", c, s);
-	    if (req->l == 0) /* nothing to write */ {
-		FD_CLR(t->srv_fd, StaticWriteEvent);
-		tv_eternity(&t->swexpire);
-	    } else  /* need the right to write */ {
-		FD_SET(t->srv_fd, StaticWriteEvent);
-		if (t->proxy->srvtimeout) {
-		    tv_delayfrom(&t->swexpire, &now, t->proxy->srvtimeout);
-		    /* FIXME: to prevent the server from expiring read timeouts during writes,
-		     * we refresh it. */
-		    t->srexpire = t->swexpire;
-		}
-		else
-		    tv_eternity(&t->swexpire);
-	    }
-
-	    if (t->proxy->mode == PR_MODE_TCP) { /* let's allow immediate data connection in this case */
-		FD_SET(t->srv_fd, StaticReadEvent);
-		if (t->proxy->srvtimeout)
-		    tv_delayfrom(&t->srexpire, &now, t->proxy->srvtimeout);
-		else
-		    tv_eternity(&t->srexpire);
-		
-		t->srv_state = SV_STDATA;
-		t->srv->cum_sess++;
-		rep->rlim = rep->data + BUFSIZE; /* no rewrite needed */
-
-		/* if the user wants to log as soon as possible, without counting
-		   bytes from the server, then this is the right moment. */
-		if (t->proxy->to_log && !(t->logs.logwait & LW_BYTES)) {
-		    t->logs.t_close = t->logs.t_connect; /* to get a valid end date */
-		    sess_log(t);
-		}
-	    }
-	    else {
-		t->srv_state = SV_STHEADERS;
-		t->srv->cum_sess++;
-		rep->rlim = rep->data + BUFSIZE - MAXREWRITE; /* rewrite needed */
-	    }
-	    tv_eternity(&t->cnexpire);
+	    tv_delayfrom(&t->cnexpire, &now, t->srv->resp_time);
+	    t->srv_state = SV_STCONN;
 	    return 1;
 	}
     }
+    else if (s == SV_STCONN) { /* connection in progress */
+	if (tv_cmp2_ms(&t->cnexpire, &now) > 0) {
+	    return 0; /* nothing changed */
+	}
+	else {
+	    if (t->srv)
+		t->srv->cur_sess--;
+	immediate_response:
+	    conn_err = SN_ERR_SRVTO; // it was a connect timeout.
+
+	    tv_eternity(&t->cnexpire);
+	    //srv_close_with_err(t, conn_err, SN_FINST_C,
+	    //	       503, t->proxy->errmsg.len503, t->proxy->errmsg.msg503);
+	    srv_return_page(t, conn_err, SN_FINST_C);
+	    return 1;
+	}
+    }
+#if 0
     else if (s == SV_STHEADERS) { /* receiving server headers */
 	/* now parse the partial (or complete) headers */
 	while (rep->lr < rep->r) { /* this loop only sees one header at each iteration */
@@ -5720,6 +5673,7 @@ int process_srv(struct session *t) {
 	}
 	return 0;
     }
+#endif
     else { /* SV_STCLOSE : nothing to do */
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	    int len;
@@ -7070,9 +7024,10 @@ int cfg_parse_global(char *file, int linenum, char **args) {
 
 void init_default_instance() {
     memset(&defproxy, 0, sizeof(defproxy));
-    defproxy.mode = PR_MODE_TCP;
+    defproxy.mode = PR_MODE_HTTP;
+    defproxy.options = PR_O_BALANCE_RR;
     defproxy.state = PR_STNEW;
-    defproxy.maxconn = cfg_maxpconn;
+    defproxy.maxconn = global.maxconn;
     defproxy.conn_retries = CONN_RETRIES;
     defproxy.logfac1 = defproxy.logfac2 = -1; /* log disabled */
 }
@@ -7163,7 +7118,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->clitimeout = defproxy.clitimeout;
 	curproxy->contimeout = defproxy.contimeout;
 	curproxy->srvtimeout = defproxy.srvtimeout;
-	curproxy->mode = defproxy.mode;
+	curproxy->mode = PR_MODE_HTTP;
 	curproxy->logfac1 = defproxy.logfac1;
 	curproxy->logsrv1 = defproxy.logsrv1;
 	curproxy->loglev1 = defproxy.loglev1;
@@ -7226,21 +7181,13 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->mon_net.s_addr &= curproxy->mon_mask.s_addr;
 	return 0;
     }
-    else if (!strcmp(args[0], "mode")) {  /* sets the proxy mode */
-	if (!strcmp(args[1], "http")) curproxy->mode = PR_MODE_HTTP;
-	else if (!strcmp(args[1], "tcp")) curproxy->mode = PR_MODE_TCP;
-	else if (!strcmp(args[1], "health")) curproxy->mode = PR_MODE_HEALTH;
-	else {
-	    Alert("parsing [%s:%d] : unknown proxy mode '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-    }
     else if (!strcmp(args[0], "disabled")) {  /* disables this proxy */
 	curproxy->state = PR_STSTOPPED;
     }
     else if (!strcmp(args[0], "enabled")) {  /* enables this proxy (used to revert a disabled default) */
 	curproxy->state = PR_STNEW;
     }
+#if 0
     else if (!strcmp(args[0], "cookie")) {  /* cookie name */
 	int cur_arg;
 //	  if (curproxy == &defproxy) {
@@ -7423,6 +7370,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	curproxy->contimeout = atol(args[1]);
     }
+#endif
     else if (!strcmp(args[0], "clitimeout")) {  /*  client timeout */
 	if (curproxy->clitimeout != defproxy.clitimeout) {
 	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n",
@@ -7436,6 +7384,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	curproxy->clitimeout = atol(args[1]);
     }
+#if 0
     else if (!strcmp(args[0], "srvtimeout")) {  /*  server timeout */
 	if (curproxy->srvtimeout != defproxy.srvtimeout) {
 	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
@@ -7456,6 +7405,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	curproxy->conn_retries = atol(args[1]);
     }
+#endif
     else if (!strcmp(args[0], "option")) {
 	if (*(args[1]) == 0) {
 	    Alert("parsing [%s:%d] : '%s' expects an option name.\n", file, linenum, args[0]);
@@ -7549,6 +7499,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	return 0;
     }
+#if 0
     else if (!strcmp(args[0], "redispatch") || !strcmp(args[0], "redisp")) {
 	/* enable reconnections to dispatch */
 	curproxy->options |= PR_O_REDISP;
@@ -7558,6 +7509,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	/* enable transparent proxy connections */
 	curproxy->options |= PR_O_TRANSP;
     }
+#endif
 #endif
     else if (!strcmp(args[0], "maxconn")) {  /* maxconn */
 	if (*(args[1]) == 0) {
@@ -7573,34 +7525,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	curproxy->grace = atol(args[1]);
     }
-    else if (!strcmp(args[0], "dispatch")) {  /* dispatch address */
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	if (strchr(args[1], ':') == NULL) {
-	    Alert("parsing [%s:%d] : '%s' expects <addr:port> as argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	curproxy->dispatch_addr = *str2sa(args[1]);
-    }
-    else if (!strcmp(args[0], "balance")) {  /* set balancing with optional algorithm */
-	if (*(args[1])) {
-	    if (!strcmp(args[1], "roundrobin")) {
-		curproxy->options |= PR_O_BALANCE_RR;
-	    }
-	    else if (!strcmp(args[1], "source")) {
-		curproxy->options |= PR_O_BALANCE_SH;
-	    }
-	    else {
-		Alert("parsing [%s:%d] : '%s' only supports 'roundrobin' and 'source' options.\n", file, linenum, args[0]);
-		return -1;
-	    }
-	}
-	else /* if no option is set, use round-robin by default */
-	    curproxy->options |= PR_O_BALANCE_RR;
-    }
-    else if (!strcmp(args[0], "server")) {  /* server address */
+    else if (!strcmp(args[0], "object")) {
 	int cur_arg;
 	char *rport;
 	char *raddr;
@@ -7630,116 +7555,58 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	LIST_INIT(&newsrv->pendconns);
 	do_check = 0;
 	newsrv->state = SRV_RUNNING; /* early server setup */
-	newsrv->id = strdup(args[1]);
 
-	/* several ways to check the port component :
-	 *  - IP    => port=+0, relative
-	 *  - IP:   => port=+0, relative
-	 *  - IP:N  => port=N, absolute
-	 *  - IP:+N => port=+N, relative
-	 *  - IP:-N => port=-N, relative
-	 */
-	raddr = strdup(args[2]);
-	rport = strchr(raddr, ':');
-	if (rport) {
-	    *rport++ = 0;
-	    realport = atol(rport);
-	    if (!isdigit((int)*rport))
-		newsrv->state |= SRV_MAPPORTS;
-	} else {
-	    realport = 0;
-	    newsrv->state |= SRV_MAPPORTS;
-	}	    
-
-	newsrv->addr = *str2sa(raddr);
-	newsrv->addr.sin_port = htons(realport);
-	free(raddr);
+	newsrv->resp_cache = 1;
+	newsrv->resp_code = 200;
 
 	newsrv->curfd = -1; /* no health-check in progress */
 	newsrv->inter = DEF_CHKINTR;
 	newsrv->rise = DEF_RISETIME;
 	newsrv->fall = DEF_FALLTIME;
 	newsrv->health = newsrv->rise; /* up, but will fall down at first failure */
-	cur_arg = 3;
+	cur_arg = 1;
 	while (*args[cur_arg]) {
-	    if (!strcmp(args[cur_arg], "cookie")) {
-		newsrv->cookie = strdup(args[cur_arg + 1]);
-		newsrv->cklen = strlen(args[cur_arg + 1]);
+	    if (!strcmp(args[cur_arg], "name")) {
+		newsrv->id = strdup(args[cur_arg + 1]);
 		cur_arg += 2;
 	    }
-	    else if (!strcmp(args[cur_arg], "rise")) {
-		newsrv->rise = atol(args[cur_arg + 1]);
-		newsrv->health = newsrv->rise;
+	    else if (!strcmp(args[cur_arg], "cache")) {
+		newsrv->resp_cache = 1;
+		cur_arg += 1;
+	    }
+	    else if (!strcmp(args[cur_arg], "no-cache")) {
+		newsrv->resp_cache = 0;
+		cur_arg += 1;
+	    }
+	    else if (!strcmp(args[cur_arg], "code")) {
+		newsrv->resp_code = atol(args[cur_arg + 1]);
 		cur_arg += 2;
 	    }
-	    else if (!strcmp(args[cur_arg], "fall")) {
-		newsrv->fall = atol(args[cur_arg + 1]);
+	    else if (!strcmp(args[cur_arg], "size")) {
+		newsrv->resp_size = atol(args[cur_arg + 1]);
 		cur_arg += 2;
 	    }
-	    else if (!strcmp(args[cur_arg], "inter")) {
-		newsrv->inter = atol(args[cur_arg + 1]);
+	    else if (!strcmp(args[cur_arg], "time")) {
+		newsrv->resp_time = atol(args[cur_arg + 1]);
 		cur_arg += 2;
-	    }
-	    else if (!strcmp(args[cur_arg], "port")) {
-		newsrv->check_port = atol(args[cur_arg + 1]);
-		cur_arg += 2;
-	    }
-	    else if (!strcmp(args[cur_arg], "backup")) {
-		newsrv->state |= SRV_BACKUP;
-		cur_arg ++;
 	    }
 	    else if (!strcmp(args[cur_arg], "weight")) {
 		int w;
 		w = atol(args[cur_arg + 1]);
 		if (w < 1 || w > 256) {
-		    Alert("parsing [%s:%d] : weight of server %s is not within 1 and 256 (%d).\n",
+		    Alert("parsing [%s:%d] : weight of object %s is not within 1 and 256 (%d).\n",
 			  file, linenum, newsrv->id, w);
 		    return -1;
 		}
 		newsrv->uweight = w - 1;
 		cur_arg += 2;
 	    }
-	    else if (!strcmp(args[cur_arg], "maxconn")) {
-		newsrv->maxconn = atol(args[cur_arg + 1]);
-		cur_arg += 2;
-	    }
-	    else if (!strcmp(args[cur_arg], "check")) {
-		global.maxsock++;
-		do_check = 1;
-		cur_arg += 1;
-	    }
-	    else if (!strcmp(args[cur_arg], "source")) {  /* address to which we bind when connecting */
-		if (!*args[cur_arg + 1]) {
-		    Alert("parsing [%s:%d] : '%s' expects <addr>[:<port>] as argument.\n",
-			  file, linenum, "source");
-		    return -1;
-		}
-		newsrv->state |= SRV_BIND_SRC;
-		newsrv->source_addr = *str2sa(args[cur_arg + 1]);
-		cur_arg += 2;
-	    }
 	    else {
-		Alert("parsing [%s:%d] : server %s only supports options 'backup', 'cookie', 'check', 'inter', 'rise', 'fall', 'port', 'source', and 'weight'.\n",
+		Alert("parsing [%s:%d] : object %s only supports options 'name', 'code', 'size', 'time', 'cache', 'no-cache', and 'weight'.\n",
 		      file, linenum, newsrv->id);
 		return -1;
 	    }
 	}
-
-	if (do_check) {
-	    if (!newsrv->check_port && !(newsrv->state & SRV_MAPPORTS))
-		newsrv->check_port = realport; /* by default */
-	    if (!newsrv->check_port) {
-		Alert("parsing [%s:%d] : server %s has neither service port nor check port. Check has been disabled.\n",
-		      file, linenum, newsrv->id);
-		return -1;
-	    }
-	    newsrv->state |= SRV_CHECKED;
-	}
-
-	if (newsrv->state & SRV_BACKUP)
-	    curproxy->srv_bck++;
-	else
-	    curproxy->srv_act++;
     }
     else if (!strcmp(args[0], "log")) {  /* syslog server address */
 	struct sockaddr_in *sa;
@@ -8585,57 +8452,6 @@ int readcfgfile(char *file) {
 	    curproxy->errmsg.msg504 = (char *)HTTP_504;
 	    curproxy->errmsg.len504 = strlen(HTTP_504);
 	}
-
-	/* now we'll start this proxy's health checks if any */
-	/* 1- count the checkers to run simultaneously */
-	nbchk = 0;
-	mininter = 0;
-	newsrv = curproxy->srv;
-	while (newsrv != NULL) {
-	    if (newsrv->state & SRV_CHECKED) {
-		if (!mininter || mininter > newsrv->inter)
-		    mininter = newsrv->inter;
-		nbchk++;
-	    }
-	    newsrv = newsrv->next;
-	}
-
-	/* 2- start them as far as possible from each others while respecting
-	 * their own intervals. For this, we will start them after their own
-	 * interval added to the min interval divided by the number of servers,
-	 * weighted by the server's position in the list.
-	 */
-	if (nbchk > 0) {
-	    struct task *t;
-	    int srvpos;
-
-	    newsrv = curproxy->srv;
-	    srvpos = 0;
-	    while (newsrv != NULL) {
-		/* should this server be checked ? */
-		if (newsrv->state & SRV_CHECKED) {
-		    if ((t = pool_alloc(task)) == NULL) {
-			Alert("parsing [%s:%d] : out of memory.\n", file, linenum);
-			return -1;
-		    }
-		
-		    t->next = t->prev = t->rqnext = NULL; /* task not in run queue yet */
-		    t->wq = LIST_HEAD(wait_queue[0]); /* but already has a wait queue assigned */
-		    t->state = TASK_IDLE;
-		    t->process = process_chk;
-		    t->context = newsrv;
-		
-		    /* check this every ms */
-		    tv_delayfrom(&t->expire, &now,
-				 newsrv->inter + mininter * srvpos / nbchk);
-		    task_queue(t);
-		    //task_wakeup(&rq, t);
-		    srvpos++;
-		}
-		newsrv = newsrv->next;
-	    }
-	}
-
 	curproxy = curproxy->next;
     }
     if (cfgerr > 0) {
@@ -8674,6 +8490,16 @@ void init(int argc, char **argv) {
      */
     tv_now(&now);
     localtime(&now.tv_sec);
+
+    /* fill the common response with human-readable data : 50 bytes per line */
+    for (i = 0; i < sizeof(common_response); i++) {
+	if (i % 50 == 49)
+	    common_response[i] = '\n';
+	else if (i % 10 == 0)
+	    common_response[i] = '.';
+	else
+	    common_response[i] = '0' + i % 10;
+    }
 
     /* initialize the log header encoding map : '{|}"#' should be encoded with
      * '#' as prefix, as well as non-printable characters ( <32 or >= 127 ).

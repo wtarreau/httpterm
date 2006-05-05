@@ -2,7 +2,7 @@
 # You should use it this way :
 #   make TARGET=os CPU=cpu
 
-VERSION := 1.2.12
+VERSION := 1.0.0
 
 # Select target OS. TARGET must match a system for which COPTS and LIBS are
 # correctly defined below.
@@ -93,8 +93,7 @@ ADDLIB =
 # Known ones are -DENABLE_POLL, -DENABLE_EPOLL, and -DUSE_MY_EPOLL
 # - use -DSTATTIME=0 to disable statistics, else specify an interval in
 #   milliseconds.
-# - use -DTPROXY to compile with transparent proxy support.
-DEFINE = -DSTATTIME=0 -DTPROXY
+DEFINE = -DSTATTIME=0
 
 # global options
 TARGET_OPTS=$(COPTS.$(TARGET))
@@ -107,20 +106,20 @@ LIBS=$(LIBS.$(TARGET)) $(LIBS.$(REGEX)) $(ADDLIB)
 CFLAGS = -Wall $(COPTS) $(DEBUG)
 LDFLAGS = -g
 
-all: haproxy
+all: httpterm
 
-haproxy: src/list.o src/chtbl.o src/hashpjw.o haproxy.o
+httpterm: src/list.o src/chtbl.o src/hashpjw.o haproxy.o
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f *.[oas] *~ *.rej core haproxy test nohup.out gmon.out src/*.[oas]
-	rm -f haproxy-$(VERSION).tar.gz haproxy-$(VERSION)
+	rm -f *.[oas] *~ *.rej core httpterm test nohup.out gmon.out src/*.[oas]
+	rm -f httpterm-$(VERSION).tar.gz httpterm-$(VERSION)
 
 tar:	clean
-	ln -s . haproxy-$(VERSION)
-	tar --exclude=haproxy-$(VERSION)/.git --exclude=haproxy-$(VERSION)/haproxy-$(VERSION) -cf - haproxy-$(VERSION)/* | gzip -c9 >haproxy-$(VERSION).tar.gz
-	rm -f haproxy-$(VERSION)
+	ln -s . httpterm-$(VERSION)
+	tar --exclude=httpterm-$(VERSION)/.git --exclude=httpterm-$(VERSION)/httpterm-$(VERSION) -cf - httpterm-$(VERSION)/* | gzip -c9 >httpterm-$(VERSION).tar.gz
+	rm -f httpterm-$(VERSION)
 
