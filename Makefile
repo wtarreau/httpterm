@@ -108,7 +108,7 @@ LDFLAGS = -g
 
 all: httpterm
 
-httpterm: src/list.o src/chtbl.o src/hashpjw.o haproxy.o
+httpterm: src/list.o src/chtbl.o src/hashpjw.o httpterm.o
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 %.o:	%.c
