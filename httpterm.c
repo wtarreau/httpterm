@@ -4621,7 +4621,7 @@ void init(int argc, char **argv) {
     if (global.maxconn == 0)
 	global.maxconn = DEFAULT_MAXCONN;
 
-    global.maxsock += global.maxconn * 2; /* each connection needs two sockets */
+    global.maxsock += global.maxconn; /* each connection needs one sockets */
 
     if (arg_mode & (MODE_DEBUG | MODE_FOREGROUND)) {
 	/* command line debug mode inhibits configuration mode */
