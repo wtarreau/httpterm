@@ -144,12 +144,6 @@
 
 #define CONN_RETRIES	3
 
-#define	CHK_CONNTIME	2000
-#define	DEF_CHKINTR	2000
-#define DEF_FALLTIME	3
-#define DEF_RISETIME	2
-#define DEF_CHECK_REQ	"OPTIONS / HTTP/1.0\r\n\r\n"
-
 /* Default connections limit.
  *
  * A system limit can be enforced at build time in order to avoid using haproxy
@@ -301,11 +295,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define PR_STSTOPPED	3
 #define PR_STPAUSED	4
 
-/* values for proxy->mode */
-#define PR_MODE_TCP	0
-#define PR_MODE_HTTP	1
-#define PR_MODE_HEALTH	2
-
 /* possible actions for the *poll() loops */
 #define POLL_LOOP_ACTION_INIT	0
 #define POLL_LOOP_ACTION_RUN	1
@@ -319,20 +308,11 @@ int strlcpy2(char *dst, const char *src, int size) {
 /* bits for proxy->options */
 #define PR_O_REDISP	0x00000001	/* allow reconnection to dispatch in case of errors */
 #define PR_O_TRANSP	0x00000002	/* transparent mode : use original DEST as dispatch */
-#define PR_O_BALANCE_RR	0x00000040	/* balance in round-robin mode */
 #define	PR_O_KEEPALIVE	0x00000080	/* follow keep-alive sessions */
-#define	PR_O_FWDFOR	0x00000100	/* insert x-forwarded-for with client address */
-#define	PR_O_BIND_SRC	0x00000200	/* bind to a specific source address when connect()ing */
-#define PR_O_HTTP_CHK	0x00002000	/* use HTTP 'OPTIONS' method to check server health */
-#define PR_O_PERSIST	0x00004000	/* server persistence stays effective even when server is down */
 #define PR_O_HTTP_CLOSE	0x00010000	/* force 'connection: close' in both directions */
 #define PR_O_CHK_CACHE	0x00020000	/* require examination of cacheability of the 'set-cookie' field */
 #define PR_O_TCP_CLI_KA	0x00040000	/* enable TCP keep-alive on client-side sessions */
-#define PR_O_TCP_SRV_KA	0x00080000	/* enable TCP keep-alive on server-side sessions */
-#define PR_O_USE_ALL_BK	0x00100000	/* load-balance between backup servers */
 #define PR_O_FORCE_CLO	0x00200000	/* enforce the connection close immediately after server response */
-#define PR_O_BALANCE_SH	0x00400000	/* balance on source IP hash */
-#define PR_O_BALANCE	(PR_O_BALANCE_RR | PR_O_BALANCE_SH)
 
 /* various session flags, bits values 0x01 to 0x20 (shift 0) */
 #define SN_DIRECT	0x00000001	/* connection made on the server matching the client cookie */
@@ -363,22 +343,7 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define SN_FINST_MASK	0x00007000	/* mask to get only final session state flags */
 #define	SN_FINST_SHIFT	12		/* bit shift */
 
-/* cookie information, bits values 0x10000 to 0x80000 (0-8 shift 16) */
-#define	SN_SCK_NONE	0x00000000	/* no set-cookie seen for the server cookie */
-#define	SN_SCK_DELETED	0x00010000	/* existing set-cookie deleted or changed */
-#define	SN_SCK_INSERTED	0x00020000	/* new set-cookie inserted or changed existing one */
-#define	SN_SCK_SEEN	0x00040000	/* set-cookie seen for the server cookie */
-#define	SN_SCK_MASK	0x00070000	/* mask to get the set-cookie field */
-#define	SN_SCK_ANY	0x00080000	/* at least one set-cookie seen (not to be counted) */
-#define	SN_SCK_SHIFT	16		/* bit shift */
-
-/* cacheability management, bits values 0x100000 to 0x300000 (0-3 shift 20) */
-#define	SN_CACHEABLE	0x00100000	/* at least part of the response is cacheable */
-#define	SN_CACHE_COOK	0x00200000	/* a cookie in the response is cacheable */
-#define	SN_CACHE_SHIFT	20		/* bit shift */
-
 /* various other session flags, bits values 0x400000 and above */
-#define SN_MONITOR	0x00400000	/* this session comes from a monitoring system */
 #define SN_ASSIGNED	0x00800000	/* no need to assign a server to this session */
 #define SN_ADDR_SET	0x01000000	/* this session's server address has been set */
 
@@ -414,13 +379,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define	MODE_VERBOSE	64
 #define	MODE_STARTING	128
 #define	MODE_FOREGROUND	256
-
-/* server flags */
-#define SRV_RUNNING	1	/* the server is UP */
-#define SRV_BACKUP	2	/* this server is a backup server */
-#define	SRV_MAPPORTS	4	/* this server uses mapped ports */
-#define	SRV_BIND_SRC	8	/* this server uses a specific source address */
-#define	SRV_CHECKED	16	/* this server needs to be checked */
 
 /* function which act on servers need to return various errors */
 #define SRV_STATUS_OK       0   /* everything is OK. */
@@ -468,20 +426,11 @@ struct buffer {
 
 struct server {
     struct server *next;
-    int state;				/* server state (SRV_*) */
     char *id;				/* just for identification */
-    struct sockaddr_in addr;		/* the address to connect to */
-    short check_port;			/* the port to use for the health checks */
-    int health;				/* 0->rise-1 = bad; rise->rise+fall-1 = good */
-    int rise, fall;			/* time in iterations */
-    int inter;				/* time in milliseconds */
-    int result;				/* 0 = connect OK, -1 = connect KO */
-    int curfd;				/* file desc used for current test, or -1 if not in test */
     unsigned char uweight, eweight;	/* user-specified weight-1, and effective weight-1 */
     unsigned int wscore;		/* weight score, used during srv map computation */
     int cur_sess;			/* number of currently active sessions (including syn_sent) */
     unsigned int cum_sess;		/* cumulated number of sessions really sent to this server */
-    unsigned int maxconn;		/* max # of active sessions. 0 = unlimited. */
     struct proxy *proxy;		/* the proxy this server belongs to */
     int resp_time;			/* expected response time in milliseconds */
     int resp_code;			/* expected response code */
@@ -510,7 +459,6 @@ struct session {
     char res_cr, res_cw;		/* results of some events */
     struct proxy *proxy;		/* the proxy this socket belongs to */
     int cli_fd;				/* the client side fd */
-    int srv_fd;				/* the server side fd */
     int cli_state;			/* state of the client side */
     int srv_state;			/* state of the server side */
     int conn_retries;			/* number of connect retries left */
@@ -537,12 +485,10 @@ struct listener {
 
 struct proxy {
     struct listener *listen;		/* the listen addresses and sockets */
-    struct in_addr mon_net, mon_mask;	/* don't forward connections from this net (network order) FIXME: should support IPv6 */
     int state;				/* proxy state */
-    struct sockaddr_in dispatch_addr;	/* the default address to connect to */
     struct server *srv;			/* known servers */
-    int srv_act, srv_bck;		/* # of running servers */
-    int tot_wact, tot_wbck;		/* total weights of active and backup servers */
+    int srv_act;			/* # of running servers */
+    int tot_wact;			/* total weights of active servers */
     struct server **srv_map;		/* the server map used to apply weights */
     int srv_map_sz;			/* the size of the effective server map */
     int srv_rr_idx;			/* next server to be elected in round robin mode */
@@ -553,7 +499,6 @@ struct proxy {
     int maxconn;			/* max # of active sessions */
     int conn_retries;			/* maximum number of connect retries */
     int options;			/* PR_O_REDISP, PR_O_TRANSP, ... */
-    int mode;				/* mode = PR_MODE_TCP, PR_MODE_HTTP or PR_MODE_HEALTH */
     struct proxy *next;
     struct timeval stop_time;		/* date to stop listening, when stopping != 0 */
     int nb_reqadd, nb_rspadd;
@@ -561,8 +506,6 @@ struct proxy {
     struct hdr_exp *rsp_exp;		/* regular expressions for response headers */
     char *req_add[MAX_NEWHDR], *rsp_add[MAX_NEWHDR]; /* headers to be added */
     int grace;				/* grace time after stop request */
-    char *check_req;			/* HTTP request to use if PR_O_HTTP_CHK is set, else NULL */
-    int check_len;			/* Length of the HTTP request */
     struct {
 	char *msg400;			/* message for error 400 */
 	int len400;			/* message length for error 400 */
@@ -1537,48 +1480,29 @@ static void session_free(struct session *s) {
 
 /*
  * This function recounts the number of usable active and backup servers for
- * proxy <p>. These numbers are returned into the p->srv_act and p->srv_bck.
+ * proxy <p>. These numbers are returned into the p->srv_act.
  * This function also recomputes the total active and backup weights.
  */
 static void recount_servers(struct proxy *px) {
     struct server *srv;
 
-    px->srv_act = 0; px->srv_bck = px->tot_wact = px->tot_wbck = 0;
+    px->srv_act = 0; px->tot_wact = 0;
     for (srv = px->srv; srv != NULL; srv = srv->next) {
-        if (srv->state & SRV_RUNNING) {
-            if (srv->state & SRV_BACKUP) {
-                px->srv_bck++;
-                px->tot_wbck += srv->eweight + 1;
-            } else {
-                px->srv_act++;
-                px->tot_wact += srv->eweight + 1;
-            }
-        }
+	px->srv_act++;
+	px->tot_wact += srv->eweight + 1;
     }
 }
 
 /* This function recomputes the server map for proxy px. It
- * relies on px->tot_wact and px->tot_wbck, so it must be
+ * relies on px->tot_wact, so it must be
  * called after recount_servers(). It also expects px->srv_map
  * to be initialized to the largest value needed.
  */
 static void recalc_server_map(struct proxy *px) {
-    int o, tot, flag;
+    int o, tot;
     struct server *cur, *best;
 
-    if (px->srv_act) {
-	flag = SRV_RUNNING;
-	tot  = px->tot_wact;
-    } else if (px->srv_bck) {
-	flag = SRV_RUNNING | SRV_BACKUP;
-	if (px->options & PR_O_USE_ALL_BK)
-	    tot = px->tot_wbck;
-	else
-	    tot = 1; /* the first server is enough */
-    } else {
-	px->srv_map_sz = 0;
-	return;
-    }
+    tot  = px->tot_wact;
 
     /* this algorithm gives priority to the first server, which means that
      * it will respect the declaration order for equivalent weights, and
@@ -1593,24 +1517,22 @@ static void recalc_server_map(struct proxy *px) {
 	int max = 0;
 	best = NULL;
 	for (cur = px->srv; cur; cur = cur->next) {
-	    if ((cur->state & (SRV_RUNNING | SRV_BACKUP)) == flag) {
-		int v;
+	    int v;
 
-		/* If we are forced to return only one server, we don't want to
-		 * go further, because we would return the wrong one due to
-		 * divide overflow.
-		 */
-		if (tot == 1) {
-		    best = cur;
-		    break;
-		}
+	    /* If we are forced to return only one server, we don't want to
+	     * go further, because we would return the wrong one due to
+	     * divide overflow.
+	     */
+	    if (tot == 1) {
+		best = cur;
+		break;
+	    }
 
-		cur->wscore += cur->eweight + 1;
-		v = (cur->wscore + tot) / tot; /* result between 0 and 3 */
-		if (best == NULL || v > max) {
-		    max = v;
-		    best = cur;
-		}
+	    cur->wscore += cur->eweight + 1;
+	    v = (cur->wscore + tot) / tot; /* result between 0 and 3 */
+	    if (best == NULL || v > max) {
+		max = v;
+		best = cur;
 	    }
 	}
 	px->srv_map[o] = best;
@@ -1633,93 +1555,6 @@ static inline struct server *get_server_rr(struct proxy *px) {
 	px->srv_rr_idx = 0;
     return px->srv_map[px->srv_rr_idx++];
 }
-
-
-/*
- * This function marks the session as 'assigned' in direct or dispatch modes,
- * or tries to assign one in balance mode, according to the algorithm. It does
- * nothing if the session had already been assigned a server.
- *
- * It may return :
- *   SRV_STATUS_OK       if everything is OK.
- *   SRV_STATUS_NOSRV    if no server is available
- *   SRV_STATUS_FULL     if all servers are saturated
- *   SRV_STATUS_INTERNAL for other unrecoverable errors.
- *
- * Upon successful return, the session flag SN_ASSIGNED to indicate that it does
- * not need to be called anymore. This usually means that s->srv can be trusted
- * in balance and direct modes. This flag is not cleared, so it's to the caller
- * to clear it if required (eg: redispatch).
- *
- */
-
-int assign_server(struct session *s) {
-#ifdef DEBUG_FULL
-    fprintf(stderr,"assign_server : s=%p\n",s);
-#endif
-
-    if (!(s->flags & SN_ASSIGNED)) {
-	s->srv = get_server_rr(s->proxy);
-	s->flags |= SN_ASSIGNED;
-    }
-    return SRV_STATUS_OK;
-}
-
-/*
- * This function assigns a server address to a session, and sets SN_ADDR_SET.
- * The address is taken from the currently assigned server, or from the
- * dispatch or transparent address.
- *
- * It may return :
- *   SRV_STATUS_OK       if everything is OK.
- *   SRV_STATUS_INTERNAL for other unrecoverable errors.
- *
- * Upon successful return, the session flag SN_ADDR_SET is set. This flag is
- * not cleared, so it's to the caller to clear it if required.
- *
- */
-int assign_server_address(struct session *s) {
-#ifdef DEBUG_FULL
-    fprintf(stderr,"assign_server_address : s=%p\n",s);
-#endif
-
-    if (s->flags & SN_DIRECT || s->proxy->options & PR_O_BALANCE) {
-	/* A server is necessarily known for this session */
-	if (!(s->flags & SN_ASSIGNED))
-	    return SRV_STATUS_INTERNAL;
-
-	s->srv_addr = s->srv->addr;
-
-	/* if this server remaps proxied ports, we'll use
-	 * the port the client connected to with an offset. */
-	if (s->srv->state & SRV_MAPPORTS) {
-	    struct sockaddr_in sockname;
-	    socklen_t namelen = sizeof(sockname);
-
-	    if (!(s->proxy->options & PR_O_TRANSP) ||
-		get_original_dst(s->cli_fd, (struct sockaddr_in *)&sockname, &namelen) == -1)
-		getsockname(s->cli_fd, (struct sockaddr *)&sockname, &namelen);
-	    s->srv_addr.sin_port = htons(ntohs(s->srv_addr.sin_port) + ntohs(sockname.sin_port));
-	}
-    }
-    else if (*(int *)&s->proxy->dispatch_addr.sin_addr) {
-	/* connect to the defined dispatch addr */
-	s->srv_addr = s->proxy->dispatch_addr;
-    }
-    else if (s->proxy->options & PR_O_TRANSP) {
-	/* in transparent mode, use the original dest addr if no dispatch specified */
-	socklen_t salen = sizeof(s->srv_addr);
-
-	if (get_original_dst(s->cli_fd, &s->srv_addr, &salen) == -1) {
-	    qfprintf(stderr, "Cannot get original server address.\n");
-	    return SRV_STATUS_INTERNAL;
-	}
-    }
-
-    s->flags |= SN_ADDR_SET;
-    return SRV_STATUS_OK;
-}
-
     
 /*
  * this function is called on a read event from a client socket.
@@ -2015,20 +1850,7 @@ int event_accept(int fd) {
 	    return 0;
 	}
 
-	/* if this session comes from a known monitoring system, we want to ignore
-	 * it as soon as possible, which means closing it immediately for TCP.
-	 */
 	s->flags = 0;
-	if (addr.ss_family == AF_INET &&
-	    p->mon_mask.s_addr &&
-	    (((struct sockaddr_in *)&addr)->sin_addr.s_addr & p->mon_mask.s_addr) == p->mon_net.s_addr) {
-	    if (p->mode == PR_MODE_TCP) {
-		close(cfd);
-		pool_free(session, s);
-		continue;
-	    }
-	    s->flags |= SN_MONITOR;
-	}
 
 	if ((t = pool_alloc(task)) == NULL) { /* disable this proxy for a while */
 	    Alert("out of memory in event_accept().\n");
@@ -2069,13 +1891,12 @@ int event_accept(int fd) {
 
 	s->task = t;
 	s->proxy = p;
-	s->cli_state = (p->mode == PR_MODE_HTTP) ?  CL_STHEADERS : CL_STDATA; /* no HTTP headers for non-HTTP proxies */
+	s->cli_state = CL_STHEADERS;
 	s->srv_state = SV_STIDLE;
 	s->req = s->rep = NULL; /* will be allocated later */
 
 	s->res_cr = s->res_cw  = RES_SILENT;
 	s->cli_fd = cfd;
-	s->srv_fd = -1;
 	s->srv = NULL;
 	s->conn_retries = p->conn_retries;
 
@@ -2149,19 +1970,7 @@ int event_accept(int fd) {
 	fdtab[cfd].owner = t;
 	fdtab[cfd].state = FD_STREADY;
 
-	if ((p->mode == PR_MODE_HTTP && (s->flags & SN_MONITOR)) ||
-	    (p->mode == PR_MODE_HEALTH && (p->options & PR_O_HTTP_CHK)))
-	    /* Either we got a request from a monitoring system on an HTTP instance,
-	     * or we're in health check mode with the 'httpchk' option enabled. In
-	     * both cases, we return a fake "HTTP/1.0 200 OK" response and we exit.
-	     */
-	    client_retnclose(s, 19, "HTTP/1.0 200 OK\r\n\r\n"); /* forge a 200 response */
-	else if (p->mode == PR_MODE_HEALTH) {  /* health check mode, no client reading */
-	    client_retnclose(s, 3, "OK\n"); /* forge an "OK" response */
-	}
-	else {
-	    FD_SET(cfd, StaticReadEvent);
-	}
+	FD_SET(cfd, StaticReadEvent);
 
 #if defined(DEBUG_FULL) && defined(ENABLE_EPOLL)
 	if (PrevReadEvent) {
@@ -2185,9 +1994,7 @@ int event_accept(int fd) {
 	tv_min(&t->expire, &s->crexpire, &s->cwexpire);
 
 	task_queue(t);
-
-	if (p->mode != PR_MODE_HEALTH)
-	    task_wakeup(&rq, t);
+	task_wakeup(&rq, t);
 
 	p->nbconn++;
 	actconn++;
@@ -2364,7 +2171,6 @@ int process_cli(struct session *t) {
 #endif
     //fprintf(stderr,"process_cli: c=%d, s=%d, cr=%d, cw=%d, sr=%d, sw=%d\n", c, s,
     //FD_ISSET(t->cli_fd, StaticReadEvent), FD_ISSET(t->cli_fd, StaticWriteEvent),
-    //FD_ISSET(t->srv_fd, StaticReadEvent), FD_ISSET(t->srv_fd, StaticWriteEvent)
     //);
     if (c == CL_STHEADERS) {
 	/* now parse the partial (or complete) headers */
@@ -2423,28 +2229,6 @@ int process_cli(struct session *t) {
 		    len = sprintf(trash, "%s\r\n", t->proxy->req_add[line]);
 		    buffer_replace2(req, req->h, req->h, trash, len);
 		}
-
-		if (t->proxy->options & PR_O_FWDFOR) {
-		    if (t->cli_addr.ss_family == AF_INET) {
-			unsigned char *pn;
-			pn = (unsigned char *)&((struct sockaddr_in *)&t->cli_addr)->sin_addr;
-			len = sprintf(trash, "X-Forwarded-For: %d.%d.%d.%d\r\n",
-				      pn[0], pn[1], pn[2], pn[3]);
-			buffer_replace2(req, req->h, req->h, trash, len);
-		    }
-		    else if (t->cli_addr.ss_family == AF_INET6) {
-			char pn[INET6_ADDRSTRLEN];
-			inet_ntop(AF_INET6,
-				  (const void *)&((struct sockaddr_in6 *)(&t->cli_addr))->sin6_addr,
-				  pn, sizeof(pn));
-			len = sprintf(trash, "X-Forwarded-For: %s\r\n", pn);
-			buffer_replace2(req, req->h, req->h, trash, len);
-		    }
-		}
-
-		/* add a "connection: close" line if needed */
-		if (t->proxy->options & PR_O_HTTP_CLOSE)
-		    buffer_replace2(req, req->h, req->h, "Connection: close\r\n", 19);
 
 		if (!memcmp(req->data, "POST ", 5)) {
 		    /* this is a POST request, which is not cacheable by default */
@@ -2506,7 +2290,7 @@ int process_cli(struct session *t) {
 
 	    if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 		int len, max;
-		len = sprintf(trash, "%08x:%s.clihdr[%04x:%04x]: ", t->uniq_id, t->proxy->id, (unsigned  short)t->cli_fd, (unsigned short)t->srv_fd);
+		len = sprintf(trash, "%08x:%s.clihdr[%04x:%04x]: ", t->uniq_id, t->proxy->id, (unsigned  short)t->cli_fd, (unsigned short)-1);
 		max = ptr - req->h;
 		UBOUND(max, sizeof(trash) - len - 1);
 		len += strlcpy2(trash + len, req->h, max + 1);
@@ -2843,7 +2627,7 @@ int process_cli(struct session *t) {
     else { /* CL_STCLOSE: nothing to do */
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	    int len;
-	    len = sprintf(trash, "%08x:%s.clicls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)t->srv_fd);
+	    len = sprintf(trash, "%08x:%s.clicls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)-1);
 	    write(1, trash, len);
 	}
 	return 0;
@@ -2913,7 +2697,11 @@ int process_srv(struct session *t) {
 	    return 1;
 	}
 	else {
-	    assign_server(t);
+	    if (!(t->flags & SN_ASSIGNED)) {
+		t->srv = get_server_rr(t->proxy);
+		t->flags |= SN_ASSIGNED;
+	    }
+
 	    if (t->srv->resp_time == 0)
 		goto immediate_response;
 
@@ -2942,7 +2730,7 @@ int process_srv(struct session *t) {
     else { /* SV_STCLOSE : nothing to do */
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	    int len;
-	    len = sprintf(trash, "%08x:%s.srvcls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)t->srv_fd);
+	    len = sprintf(trash, "%08x:%s.srvcls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)-1);
 	    write(1, trash, len);
 	}
 	return 0;
@@ -2996,7 +2784,7 @@ int process_session(struct task *t) {
     
     if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	int len;
-	len = sprintf(trash, "%08x:%s.closed[%04x:%04x]\n", s->uniq_id, s->proxy->id, (unsigned short)s->cli_fd, (unsigned short)s->srv_fd);
+	len = sprintf(trash, "%08x:%s.closed[%04x:%04x]\n", s->uniq_id, s->proxy->id, (unsigned short)s->cli_fd, (unsigned short)-1);
 	write(1, trash, len);
     }
 
@@ -3506,55 +3294,22 @@ void sig_dump_state(int sig) {
 
 	while (s) {
 	    snprintf(trash, sizeof(trash),
-		     "SIGHUP: Server %s/%s is %s. Conn: %d act, %d pend, %d tot.",
+		     "SIGHUP: Server %s/%s : Conn: %d act, %d pend, %d tot.",
 		     p->id, s->id,
-		     (s->state & SRV_RUNNING) ? "UP" : "DOWN",
 		     s->cur_sess, 0, s->cum_sess);
 	    Warning("%s\n", trash);
 	    s = s->next;
 	}
 
-	if (p->srv_act == 0) {
-	    snprintf(trash, sizeof(trash),
-		     "SIGHUP: Proxy %s %s ! Conn: %d act, %d pend (%d unass), %d tot.",
-		     p->id,
-		     (p->srv_bck) ? "is running on backup servers" : "has no server available",
-		     p->nbconn, 0, 0,  p->cum_conn);
-        } else {
-	    snprintf(trash, sizeof(trash),
-		     "SIGHUP: Proxy %s has %d active servers and %d backup servers available."
-		     " Conn: %d act, %d pend (%d unass), %d tot.",
-		     p->id, p->srv_act, p->srv_bck,
-		     p->nbconn, 0, 0, p->cum_conn);
-	}
+	snprintf(trash, sizeof(trash),
+		 "SIGHUP: Proxy %s has %d active servers available."
+		 " Conn: %d act, %d pend (%d unass), %d tot.",
+		 p->id, p->srv_act, 
+		 p->nbconn, 0, 0, p->cum_conn);
 	Warning("%s\n", trash);
-
 	p = p->next;
     }
     signal(sig, sig_dump_state);
-}
-
-void dump(int sig) {
-    struct task *t, *tnext;
-    struct session *s;
-
-    tnext = ((struct task *)LIST_HEAD(wait_queue[0]))->next;
-    while ((t = tnext) != LIST_HEAD(wait_queue[0])) { /* we haven't looped ? */
-	tnext = t->next;
-	s = t->context;
-	qfprintf(stderr,"[dump] wq: task %p, still %ld ms, "
-		 "cli=%d, srv=%d, cr=%d, cw=%d, sr=%d, sw=%d, "
-		 "req=%d, rep=%d, clifd=%d\n",
-		 s, tv_remain(&now, &t->expire),
-		 s->cli_state,
-		 s->srv_state,
-		 FD_ISSET(s->cli_fd, StaticReadEvent),
-		 FD_ISSET(s->cli_fd, StaticWriteEvent),
-		 FD_ISSET(s->srv_fd, StaticReadEvent),
-		 FD_ISSET(s->srv_fd, StaticWriteEvent),
-		 s->req->l, s->rep?s->rep->l:0, s->cli_fd
-		 );
-    }
 }
 
 #ifdef DEBUG_MEMORY
@@ -3734,8 +3489,6 @@ int cfg_parse_global(char *file, int linenum, char **args) {
 
 void init_default_instance() {
     memset(&defproxy, 0, sizeof(defproxy));
-    defproxy.mode = PR_MODE_HTTP;
-    defproxy.options = PR_O_BALANCE_RR;
     defproxy.state = PR_STNEW;
     defproxy.maxconn = global.maxconn;
     defproxy.conn_retries = CONN_RETRIES;
@@ -3781,10 +3534,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->conn_retries = defproxy.conn_retries;
 	curproxy->options = defproxy.options;
 
-	if (defproxy.check_req)
-	    curproxy->check_req = strdup(defproxy.check_req);
-	curproxy->check_len = defproxy.check_len;
-
 	if (defproxy.errmsg.msg400)
 	    curproxy->errmsg.msg400 = strdup(defproxy.errmsg.msg400);
 	curproxy->errmsg.len400 = defproxy.errmsg.len400;
@@ -3814,15 +3563,11 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->errmsg.len504 = defproxy.errmsg.len504;
 
 	curproxy->clitimeout = defproxy.clitimeout;
-	curproxy->mode = PR_MODE_HTTP;
 	curproxy->grace  = defproxy.grace;
-	curproxy->mon_net = defproxy.mon_net;
-	curproxy->mon_mask = defproxy.mon_mask;
 	return 0;
     }
     else if (!strcmp(args[0], "defaults")) {  /* use this one to assign default values */
 	/* some variables may have already been initialized earlier */
-	if (defproxy.check_req)     free(defproxy.check_req);
 	if (defproxy.errmsg.msg400) free(defproxy.errmsg.msg400);
 	if (defproxy.errmsg.msg403) free(defproxy.errmsg.msg403);
 	if (defproxy.errmsg.msg408) free(defproxy.errmsg.msg408);
@@ -3857,16 +3602,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	global.maxsock++;
 	return 0;
     }
-    else if (!strcmp(args[0], "monitor-net")) {  /* set the range of IPs to ignore */
-	if (!*args[1] || !str2net(args[1], &curproxy->mon_net, &curproxy->mon_mask)) {
-	    Alert("parsing [%s:%d] : '%s' expects address[/mask].\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	/* flush useless bits */
-	curproxy->mon_net.s_addr &= curproxy->mon_mask.s_addr;
-	return 0;
-    }
     else if (!strcmp(args[0], "disabled")) {  /* disables this proxy */
 	curproxy->state = PR_STSTOPPED;
     }
@@ -3897,63 +3632,19 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	else if (!strcmp(args[1], "keepalive"))
 	    /* enable keep-alive */
 	    curproxy->options |= PR_O_KEEPALIVE;
-	else if (!strcmp(args[1], "forwardfor"))
-	    /* insert x-forwarded-for field */
-	    curproxy->options |= PR_O_FWDFOR;
 	else if (!strcmp(args[1], "httpclose"))
 	    /* force connection: close in both directions in HTTP mode */
 	    curproxy->options |= PR_O_HTTP_CLOSE;
 	else if (!strcmp(args[1], "forceclose"))
 	    /* force connection: close in both directions in HTTP mode and enforce end of session */
 	    curproxy->options |= PR_O_FORCE_CLO | PR_O_HTTP_CLOSE;
-	else if (!strcmp(args[1], "checkcache"))
-	    /* require examination of cacheability of the 'set-cookie' field */
-	    curproxy->options |= PR_O_CHK_CACHE;
 	else if (!strcmp(args[1], "tcpka")) {
 	    /* enable TCP keep-alives on client and server sessions */
-	    curproxy->options |= PR_O_TCP_CLI_KA | PR_O_TCP_SRV_KA;
+	    curproxy->options |= PR_O_TCP_CLI_KA;
 	}
 	else if (!strcmp(args[1], "clitcpka")) {
 	    /* enable TCP keep-alives on client sessions */
 	    curproxy->options |= PR_O_TCP_CLI_KA;
-	}
-	else if (!strcmp(args[1], "srvtcpka")) {
-	    /* enable TCP keep-alives on server sessions */
-	    curproxy->options |= PR_O_TCP_SRV_KA;
-	}
-	else if (!strcmp(args[1], "allbackups")) {
-	    /* Use all backup servers simultaneously */
-	    curproxy->options |= PR_O_USE_ALL_BK;
-	}
-	else if (!strcmp(args[1], "httpchk")) {
-	    /* use HTTP request to check servers' health */
-	    if (curproxy->check_req != NULL) {
-		free(curproxy->check_req);
-	    }
-	    curproxy->options |= PR_O_HTTP_CHK;
-	    if (!*args[2]) { /* no argument */
-		curproxy->check_req = strdup(DEF_CHECK_REQ); /* default request */
-		curproxy->check_len = strlen(DEF_CHECK_REQ);
-	    } else if (!*args[3]) { /* one argument : URI */
-		int reqlen = strlen(args[2]) + strlen("OPTIONS / HTTP/1.0\r\n\r\n");
-		curproxy->check_req = (char *)malloc(reqlen);
-		curproxy->check_len = snprintf(curproxy->check_req, reqlen,
-			 "OPTIONS %s HTTP/1.0\r\n\r\n", args[2]); /* URI to use */
-	    } else { /* more arguments : METHOD URI [HTTP_VER] */
-		int reqlen = strlen(args[2]) + strlen(args[3]) + 3 + strlen("\r\n\r\n");
-		if (*args[4])
-		    reqlen += strlen(args[4]);
-		else
-		    reqlen += strlen("HTTP/1.0");
-		    
-		curproxy->check_req = (char *)malloc(reqlen);
-		curproxy->check_len = snprintf(curproxy->check_req, reqlen,
-			 "%s %s %s\r\n\r\n", args[2], args[3], *args[4]?args[4]:"HTTP/1.0");
-	    }
-	}
-	else if (!strcmp(args[1], "persist")) {
-	    /* persist on using the server specified by the cookie, even when it's down */
-	    curproxy->options |= PR_O_PERSIST;
 	}
 	else {
 	    Alert("parsing [%s:%d] : unknown option '%s'.\n", file, linenum, args[1]);
@@ -4000,16 +3691,10 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	newsrv->proxy = curproxy;
 
 	do_check = 0;
-	newsrv->state = SRV_RUNNING; /* early server setup */
 
 	newsrv->resp_cache = 1;
 	newsrv->resp_code = 200;
 
-	newsrv->curfd = -1; /* no health-check in progress */
-	newsrv->inter = DEF_CHKINTR;
-	newsrv->rise = DEF_RISETIME;
-	newsrv->fall = DEF_FALLTIME;
-	newsrv->health = newsrv->rise; /* up, but will fall down at first failure */
 	cur_arg = 1;
 	while (*args[cur_arg]) {
 	    if (!strcmp(args[cur_arg], "name")) {
@@ -4695,29 +4380,6 @@ int readcfgfile(char *file) {
 	    Alert("parsing %s : listener %s has no listen address. Please either specify a valid address on the <listen> line, or use the <bind> keyword.\n", file, curproxy->id);
 	    cfgerr++;
 	}
-	else if ((curproxy->mode != PR_MODE_HEALTH) &&
-	    !(curproxy->options & (PR_O_TRANSP | PR_O_BALANCE)) &&
-	    (*(int *)&curproxy->dispatch_addr.sin_addr == 0)) {
-	    Alert("parsing %s : listener %s has no dispatch address and is not in transparent or balance mode.\n",
-		    file, curproxy->id);
-	    cfgerr++;
-	}
-	else if ((curproxy->mode != PR_MODE_HEALTH) && (curproxy->options & PR_O_BALANCE)) {
-	    if (curproxy->options & PR_O_TRANSP) {
-		Alert("parsing %s : listener %s cannot use both transparent and balance mode.\n",
-		      file, curproxy->id);
-		cfgerr++;
-	    }
-	    else if (curproxy->srv == NULL) {
-		Alert("parsing %s : listener %s needs at least 1 server in balance mode.\n",
-		      file, curproxy->id);
-		cfgerr++;
-	    }
-	    else if (*(int *)&curproxy->dispatch_addr.sin_addr != 0) {
-		Warning("parsing %s : dispatch address of listener %s will be ignored in balance mode.\n",
-			file, curproxy->id);
-	    }
-	}
 
 	/* first, we will invert the servers list order */
 	newsrv = NULL;
@@ -4736,7 +4398,7 @@ int readcfgfile(char *file) {
 	if (newsrv) {
 	    struct server *srv;
 	    int pgcd;
-	    int act, bck;
+	    int act;
 
 	    /* We will factor the weights to reduce the table,
 	     * using Euclide's largest common divisor algorithm
@@ -4750,21 +4412,14 @@ int readcfgfile(char *file) {
 		    t = pgcd % w;
 		    pgcd = w;
 		    w = t;
-			}
+		}
 	    }
 
-	    act = bck = 0;
+	    act = 0;
 	    for (srv = newsrv; srv; srv = srv->next) {
 		srv->eweight = ((srv->uweight + 1) / pgcd) - 1;
-		if (srv->state & SRV_BACKUP)
-		    bck += srv->eweight + 1;
-		else
-		    act += srv->eweight + 1;
+		act += srv->eweight + 1;
 	    }
-
-	    /* this is the largest map we will ever need for this servers list */
-	    if (act < bck)
-		act = bck;
 
 	    curproxy->srv_map = (struct server **)calloc(act, sizeof(struct server *));
 	    /* recounts servers and their weights */
@@ -5122,9 +4777,6 @@ void deinit(void) {
 	if (p->id)
 	    free(p->id);
 
-	if (p->check_req)
-	    free(p->check_req);
-
 	/* only strup if the user have set in config.
 	   When should we free it?!
 	   if (p->errmsg.msg400) free(p->errmsg.msg400);
@@ -5183,7 +4835,6 @@ int main(int argc, char **argv) {
     FILE *pidfile = NULL;
     init(argc, argv);
 
-    signal(SIGQUIT, dump);
     signal(SIGHUP, sig_dump_state);
 #ifdef DEBUG_MEMORY
     signal(SIGINT, sig_int);
