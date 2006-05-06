@@ -134,9 +134,6 @@
 #define RESPSIZE	1048576
 #endif
 
-#define REQURI_LEN	1024
-#define CAPTURE_LEN	64
-
 // max # args on a configuration line
 #define MAX_LINE_ARGS	40
 
@@ -145,13 +142,6 @@
 
 // max # of matches per regexp
 #define	MAX_MATCH	10
-
-// cookie delimitor in "prefix" mode. This character is inserted between the
-// persistence cookie and the original value. The '~' is allowed by RFC2965,
-// and should not be too common in server names.
-#ifndef COOKIE_DELIM
-#define COOKIE_DELIM	'~'
-#endif
 
 #define CONN_RETRIES	3
 
@@ -291,13 +281,8 @@ int strlcpy2(char *dst, const char *src, int size) {
 
 #define sizeof_task	sizeof(struct task)
 #define sizeof_session	sizeof(struct session)
-#define sizeof_pendconn	sizeof(struct pendconn)
 #define sizeof_buffer	sizeof(struct buffer)
 #define sizeof_fdtab	sizeof(struct fdtab)
-#define sizeof_requri	REQURI_LEN
-#define sizeof_capture	CAPTURE_LEN
-#define sizeof_curappsession	CAPTURE_LEN	/* current_session pool */
-#define sizeof_appsess	sizeof(struct appsessions)
 
 /* different possible states for the sockets */
 #define FD_STCLOSE	0
@@ -335,18 +320,11 @@ int strlcpy2(char *dst, const char *src, int size) {
 /* bits for proxy->options */
 #define PR_O_REDISP	0x00000001	/* allow reconnection to dispatch in case of errors */
 #define PR_O_TRANSP	0x00000002	/* transparent mode : use original DEST as dispatch */
-#define PR_O_COOK_RW	0x00000004	/* rewrite all direct cookies with the right serverid */
-#define PR_O_COOK_IND	0x00000008	/* keep only indirect cookies */
-#define PR_O_COOK_INS	0x00000010	/* insert cookies when not accessing a server directly */
-#define PR_O_COOK_PFX	0x00000020	/* rewrite all cookies by prefixing the right serverid */
-#define PR_O_COOK_ANY	(PR_O_COOK_RW | PR_O_COOK_IND | PR_O_COOK_INS | PR_O_COOK_PFX)
 #define PR_O_BALANCE_RR	0x00000040	/* balance in round-robin mode */
 #define	PR_O_KEEPALIVE	0x00000080	/* follow keep-alive sessions */
 #define	PR_O_FWDFOR	0x00000100	/* insert x-forwarded-for with client address */
 #define	PR_O_BIND_SRC	0x00000200	/* bind to a specific source address when connect()ing */
 #define PR_O_NULLNOLOG	0x00000400	/* a connect without request will not be logged */
-#define PR_O_COOK_NOC	0x00000800	/* add a 'Cache-control' header with the cookie */
-#define PR_O_COOK_POST	0x00001000	/* don't insert cookies for requests other than a POST */
 #define PR_O_HTTP_CHK	0x00002000	/* use HTTP 'OPTIONS' method to check server health */
 #define PR_O_PERSIST	0x00004000	/* server persistence stays effective even when server is down */
 #define PR_O_LOGASAP	0x00008000	/* log as soon as possible, without waiting for the session to complete */
@@ -366,14 +344,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define SN_SVDENY	0x00000008	/* a server header matches a deny regex */
 #define SN_SVALLOW	0x00000010	/* a server header matches an allow regex */
 #define	SN_POST		0x00000020	/* the request was an HTTP POST */
-
-/* session flags dedicated to cookies : bits values 0x40, 0x80 (0-3 shift 6) */
-#define	SN_CK_NONE	0x00000000	/* this session had no cookie */
-#define	SN_CK_INVALID	0x00000040	/* this session had a cookie which matches no server */
-#define	SN_CK_DOWN	0x00000080	/* this session had cookie matching a down server */
-#define	SN_CK_VALID	0x000000C0	/* this session had cookie matching a valid server */
-#define	SN_CK_MASK	0x000000C0	/* mask to get this session's cookie flags */
-#define SN_CK_SHIFT	6		/* bit shift */
 
 /* session termination conditions, bits values 0x100 to 0x700 (0-7 shift 8) */
 #define SN_ERR_NONE     0x00000000
@@ -485,10 +455,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define LW_RESP		32	/* http RESPonse */
 #define LW_PXIP		64	/* proxy IP */
 #define LW_PXID		128	/* proxy ID */
-#define LW_BYTES	256	/* bytes read from server */
-#define LW_COOKIE	512	/* captured cookie */
-#define LW_REQHDR	1024	/* request header(s) */
-#define LW_RSPHDR	2048	/* response header(s) */
 
 #define ERR_NONE	0	/* no error */
 #define ERR_RETRYABLE	1	/* retryable error, may be cumulated */
@@ -499,15 +465,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define LIST_HEAD(a)	((void *)(&(a)))
 
 /*********************************************************************/
-
-struct cap_hdr {
-    struct cap_hdr *next;
-    char *name;				/* header name, case insensitive */
-    int namelen;			/* length of the header name, to speed-up lookups */
-    int len;				/* capture length, not including terminal zero */
-    int index;				/* index in the output array */
-    void *pool;				/* pool of pre-allocated memory area of (len+1) bytes */
-};
 
 struct hdr_exp {
     struct hdr_exp *next;
@@ -524,20 +481,10 @@ struct buffer {
     char data[BUFSIZE];
 };
 
-struct pendconn {
-    struct list list;			/* chaining ... */
-    struct session *sess;		/* the session waiting for a connection */
-    struct server *srv;			/* the server we are waiting for */
-};
-
 struct server {
     struct server *next;
     int state;				/* server state (SRV_*) */
-    int  cklen;				/* the len of the cookie, to speed up checks */
-    char *cookie;			/* the id set in the cookie */
     char *id;				/* just for identification */
-    struct list pendconns;		/* pending connections */
-    int nbpend;				/* number of pending connections */
     struct sockaddr_in addr;		/* the address to connect to */
     struct sockaddr_in source_addr;	/* the address to which we want to bind for connect() */
     short check_port;			/* the port to use for the health checks */
@@ -575,10 +522,8 @@ struct session {
     /* application specific below */
     struct timeval crexpire;		/* expiration date for a client read  */
     struct timeval cwexpire;		/* expiration date for a client write */
-    struct timeval srexpire;		/* expiration date for a server read  */
-    struct timeval swexpire;		/* expiration date for a server write */
     struct timeval cnexpire;		/* expiration date for a connect */
-    char res_cr, res_cw, res_sr, res_sw;/* results of some events */
+    char res_cr, res_cw;		/* results of some events */
     struct proxy *proxy;		/* the proxy this socket belongs to */
     int cli_fd;				/* the client side fd */
     int srv_fd;				/* the server side fd */
@@ -592,23 +537,11 @@ struct session {
     struct sockaddr_storage cli_addr;	/* the client address */
     struct sockaddr_in srv_addr;	/* the address to connect to */
     struct server *srv;			/* the server being used */
-    struct pendconn *pend_pos;		/* if not NULL, points to the position in the pending queue */
-    char **req_cap;			/* array of captured request headers (may be NULL) */
-    char **rsp_cap;			/* array of captured response headers (may be NULL) */
     struct {
 	int logwait;			/* log fields waiting to be collected : LW_* */
 	struct timeval tv_accept;	/* date of the accept() (beginning of the session) */
 	long  t_request;		/* delay before the end of the request arrives, -1 if never occurs */
 	long  t_queue;			/* delay before the session gets out of the connect queue, -1 if never occurs */
-	long  t_connect;		/* delay before the connect() to the server succeeds, -1 if never occurs */
-	long  t_data;			/* delay before the first data byte from the server ... */
-	unsigned long  t_close;		/* total session duration */
-	unsigned long queue_size;	/* overall number of sessions waiting for a connect slot on this instance at accept() time */
-	char *uri;			/* first line if log needed, NULL otherwise */
-	char *cli_cookie;		/* cookie presented by the client, in capture mode */
-	char *srv_cookie;		/* cookie presented by the server, in capture mode */
-	int status;			/* HTTP status from the server, negative if from proxy */
-	long long bytes;		/* number of bytes transferred from the server */
     } logs;
     unsigned int uniq_id;		/* unique ID used for the traces */
 };
@@ -630,23 +563,8 @@ struct proxy {
     struct server **srv_map;		/* the server map used to apply weights */
     int srv_map_sz;			/* the size of the effective server map */
     int srv_rr_idx;			/* next server to be elected in round robin mode */
-    char *cookie_name;			/* name of the cookie to look for */
-    int  cookie_len;			/* strlen(cookie_name), computed only once */
-    char *appsession_name;		/* name of the cookie to look for */
-    int  appsession_name_len;		/* strlen(appsession_name), computed only once */
-    int  appsession_len;		/* length of the appsession cookie value to be used */
-    int  appsession_timeout;
-    CHTbl htbl_proxy;			/* Per Proxy hashtable */
-    char *capture_name;			/* beginning of the name of the cookie to capture */
-    int  capture_namelen;		/* length of the cookie name to match */
-    int  capture_len;			/* length of the string to be captured */
     int clitimeout;			/* client I/O timeout (in milliseconds) */
-    int srvtimeout;			/* server I/O timeout (in milliseconds) */
-    int contimeout;			/* connect timeout (in milliseconds) */
     char *id;				/* proxy id */
-    struct list pendconns;		/* pending connections with no server assigned yet */
-    int nbpend;				/* number of pending connections with no server assigned yet */
-    int totpend;			/* total number of pending connections on this instance (for stats) */
     int nbconn;				/* # of active sessions */
     unsigned int cum_conn;		/* cumulated number of processed sessions */
     int maxconn;			/* max # of active sessions */
@@ -663,10 +581,6 @@ struct proxy {
     int nb_reqadd, nb_rspadd;
     struct hdr_exp *req_exp;		/* regular expressions for request headers */
     struct hdr_exp *rsp_exp;		/* regular expressions for response headers */
-    int nb_req_cap, nb_rsp_cap;		/* # of headers to be captured */
-    struct cap_hdr *req_cap;		/* chained list of request headers to be captured */
-    struct cap_hdr *rsp_cap;		/* chained list of response headers to be captured */
-    void *req_cap_pool, *rsp_cap_pool;	/* pools of pre-allocated char ** used to build the sessions */
     char *req_add[MAX_NEWHDR], *rsp_add[MAX_NEWHDR]; /* headers to be added */
     int grace;				/* grace time after stop request */
     char *check_req;			/* HTTP request to use if PR_O_HTTP_CHK is set, else NULL */
@@ -736,13 +650,9 @@ fd_set	*StaticReadEvent,
 int cfg_polling_mechanism = 0;     /* POLL_USE_{SELECT|POLL|EPOLL} */
 
 void **pool_session = NULL,
-    **pool_pendconn = NULL,
     **pool_buffer   = NULL,
     **pool_fdtab    = NULL,
-    **pool_requri   = NULL,
-    **pool_task	    = NULL,
-    **pool_capture  = NULL,
-    **pool_appsess  = NULL;
+    **pool_task	    = NULL;
 
 struct proxy *proxy  = NULL;	/* list of all existing proxies */
 struct fdtab *fdtab = NULL;	/* array of all the file descriptors */
@@ -762,7 +672,6 @@ static int totalconn = 0;	/* total # of terminated sessions */
 static int actconn = 0;		/* # of active sessions */
 static int maxfd = 0;		/* # of the highest fd + 1 */
 static int listeners = 0;	/* # of listeners */
-static int stopping = 0;	/* non zero means stopping in progress */
 static struct timeval now = {0,0};	/* the current date at any moment */
 static struct proxy defproxy;		/* fake proxy used to assign default values on all instances */
 
@@ -819,13 +728,6 @@ const char *log_levels[NB_LOG_LEVELS] = {
 
 const char *monthname[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 			     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-
-const char sess_term_cond[8]  = "-cCsSPRI";	/* normal, CliTo, CliErr, SrvTo, SrvErr, PxErr, Resource, Internal */
-const char sess_fin_state[8]  = "-RCHDL67";	/* cliRequest, srvConnect, srvHeader, Data, Last, unknown */
-const char sess_cookie[4]     = "NIDV";		/* No cookie, Invalid cookie, cookie for a Down server, Valid cookie */
-const char sess_set_cookie[8] = "N1I3PD5R";	/* No set-cookie, unknown, Set-Cookie Inserted, unknown,
-					    	   Set-cookie seen and left unchanged (passive), Set-cookie Deleted,
-						   unknown, Set-cookie Rewritten */
 
 #define MAX_HOSTNAME_LEN	32
 static char hostname[MAX_HOSTNAME_LEN] = "";
@@ -918,13 +820,7 @@ static char *srv_stnames[8] = {"IDL", "PND", "CON", "HDR", "DAT", "SHR", "SHW", 
 int event_accept(int fd);
 int event_cli_read(int fd);
 int event_cli_write(int fd);
-int event_srv_read(int fd);
-int event_srv_write(int fd);
 int process_session(struct task *t);
-
-static int appsession_task_init(void);
-static int appsession_init(void);
-static int appsession_refresh(struct task *t);
 
 /*********************************************************************/
 /*  general purpose functions  ***************************************/
@@ -1837,7 +1733,6 @@ struct task *task_queue(struct task *task) {
 /*********************************************************************/
 
 /* some prototypes */
-static int maintain_proxies(void);
 
 /* This either returns the sockname or the original destination address. Code
  * inspired from Patrick Schaaf's example of nf_getsockname() implementation.
@@ -1862,30 +1757,6 @@ static void session_free(struct session *s) {
 	pool_free(buffer, s->req);
     if (s->rep)
 	pool_free(buffer, s->rep);
-
-    if (s->rsp_cap != NULL) {
-	struct cap_hdr *h;
-	for (h = s->proxy->rsp_cap; h; h = h->next) {
-	    if (s->rsp_cap[h->index] != NULL)
-		pool_free_to(h->pool, s->rsp_cap[h->index]);
-	}
-	pool_free_to(s->proxy->rsp_cap_pool, s->rsp_cap);
-    }
-    if (s->req_cap != NULL) {
-	struct cap_hdr *h;
-	for (h = s->proxy->req_cap; h; h = h->next) {
-	    if (s->req_cap[h->index] != NULL)
-		pool_free_to(h->pool, s->req_cap[h->index]);
-	}
-	pool_free_to(s->proxy->req_cap_pool, s->req_cap);
-    }
-
-    if (s->logs.uri)
-	pool_free(requri, s->logs.uri);
-    if (s->logs.cli_cookie)
-	pool_free(capture, s->logs.cli_cookie);
-    if (s->logs.srv_cookie)
-	pool_free(capture, s->logs.srv_cookie);
 
     pool_free(session, s);
 }
@@ -2013,9 +1884,6 @@ int assign_server(struct session *s) {
 #ifdef DEBUG_FULL
     fprintf(stderr,"assign_server : s=%p\n",s);
 #endif
-
-    if (s->pend_pos)
-	return SRV_STATUS_INTERNAL;
 
     if (!(s->flags & SN_ASSIGNED)) {
 	s->srv = get_server_rr(s->proxy);
@@ -2186,110 +2054,6 @@ int event_cli_read(int fd) {
 
 
 /*
- * this function is called on a read event from a server socket.
- * It returns 0.
- */
-int event_srv_read(int fd) {
-    struct task *t = fdtab[fd].owner;
-    struct session *s = t->context;
-    struct buffer *b = s->rep;
-    int ret, max;
-
-#ifdef DEBUG_FULL
-    fprintf(stderr,"event_srv_read : fd=%d, s=%p\n", fd, s);
-#endif
-
-    if (fdtab[fd].state != FD_STERROR) {
-#ifdef FILL_BUFFERS
-	while (1)
-#else
-	do
-#endif
-	{
-	    if (b->l == 0) { /* let's realign the buffer to optimize I/O */
-		b->r = b->w = b->h = b->lr  = b->data;
-		max = b->rlim - b->data;
-	    }
-	    else if (b->r > b->w) {
-		max = b->rlim - b->r;
-	    }
-	    else {
-		max = b->w - b->r;
-		/* FIXME: theorically, if w>0, we shouldn't have rlim < data+size anymore
-		 * since it means that the rewrite protection has been removed. This
-		 * implies that the if statement can be removed.
-		 */
-		if (max > b->rlim - b->data)
-		    max = b->rlim - b->data;
-	    }
-	    
-	    if (max == 0) {  /* not anymore room to store data */
-		FD_CLR(fd, StaticReadEvent);
-		break;
-	    }
-
-#ifndef MSG_NOSIGNAL
-	    {
-		int skerr;
-		socklen_t lskerr = sizeof(skerr);
-
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-		if (skerr)
-		    ret = -1;
-		else
-		    ret = recv(fd, b->r, max, 0);
-	    }
-#else
-	    ret = recv(fd, b->r, max, MSG_NOSIGNAL);
-#endif
-	    if (ret > 0) {
-		b->r += ret;
-		b->l += ret;
-		s->res_sr = RES_DATA;
-	    
-		if (b->r == b->data + BUFSIZE) {
-		    b->r = b->data; /* wrap around the buffer */
-		}
-
-		b->total += ret;
-		/* we hope to read more data or to get a close on next round */
-		continue;
-	    }
-	    else if (ret == 0) {
-		s->res_sr = RES_NULL;
-		break;
-	    }
-	    else if (errno == EAGAIN) {/* ignore EAGAIN */
-		break;
-	    }
-	    else {
-		s->res_sr = RES_ERROR;
-		fdtab[fd].state = FD_STERROR;
-		break;
-	    }
-	} /* while(1) */
-#ifndef FILL_BUFFERS
-	while (0);
-#endif
-    }
-    else {
-	s->res_sr = RES_ERROR;
-	fdtab[fd].state = FD_STERROR;
-    }
-
-    if (s->res_sr != RES_SILENT) {
-	if (s->proxy->srvtimeout && FD_ISSET(fd, StaticReadEvent))
-	    tv_delayfrom(&s->srexpire, &now, s->proxy->srvtimeout);
-	else
-	    tv_eternity(&s->srexpire);
-	
-	task_wakeup(&rq, t);
-    }
-
-    return 0;
-}
-
-/*
  * this function is called on a write event from a client socket.
  * It returns 0.
  */
@@ -2395,118 +2159,6 @@ int event_cli_write(int fd) {
 }
 
 
-/*
- * this function is called on a write event from a server socket.
- * It returns 0.
- */
-int event_srv_write(int fd) {
-    struct task *t = fdtab[fd].owner;
-    struct session *s = t->context;
-    struct buffer *b = s->req;
-    int ret, max;
-
-#ifdef DEBUG_FULL
-    fprintf(stderr,"event_srv_write : fd=%d, s=%p\n", fd, s);
-#endif
-
-    if (b->l == 0) { /* let's realign the buffer to optimize I/O */
-	b->r = b->w = b->h = b->lr = b->data;
-	//	max = BUFSIZE;		BUG !!!!
-	max = 0;
-    }
-    else if (b->r > b->w) {
-	max = b->r - b->w;
-    }
-    else
-	max = b->data + BUFSIZE - b->w;
-    
-    if (fdtab[fd].state != FD_STERROR) {
-	if (max == 0) {
-	    /* may be we have received a connection acknowledgement in TCP mode without data */
-	    if (s->srv_state == SV_STCONN) {
-		int skerr;
-		socklen_t lskerr = sizeof(skerr);
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-		if (skerr) {
-		    s->res_sw = RES_ERROR;
-		    fdtab[fd].state = FD_STERROR;
-		    task_wakeup(&rq, t);
-		    tv_eternity(&s->swexpire);
-		    FD_CLR(fd, StaticWriteEvent);
-		    return 0;
-		}
-	    }
-
-	    s->res_sw = RES_NULL;
-	    task_wakeup(&rq, t);
-	    fdtab[fd].state = FD_STREADY;
-	    tv_eternity(&s->swexpire);
-	    FD_CLR(fd, StaticWriteEvent);
-	    return 0;
-	}
-
-#ifndef MSG_NOSIGNAL
-	{
-	    int skerr;
-	    socklen_t lskerr = sizeof(skerr);
-	    getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-	    if (skerr)
-		ret = -1;
-	    else
-		ret = send(fd, b->w, max, MSG_DONTWAIT);
-	}
-#else
-	ret = send(fd, b->w, max, MSG_DONTWAIT | MSG_NOSIGNAL);
-#endif
-	fdtab[fd].state = FD_STREADY;
-	if (ret > 0) {
-	    b->l -= ret;
-	    b->w += ret;
-	    
-	    s->res_sw = RES_DATA;
-	    
-	    if (b->w == b->data + BUFSIZE) {
-		b->w = b->data; /* wrap around the buffer */
-	    }
-	}
-	else if (ret == 0) {
-	    /* nothing written, just make as if we were never called */
-	    // s->res_sw = RES_NULL;
-	    return 0;
-	}
-	else if (errno == EAGAIN) /* ignore EAGAIN */
-	    return 0;
-	else {
-	    s->res_sw = RES_ERROR;
-	    fdtab[fd].state = FD_STERROR;
-	}
-    }
-    else {
-	s->res_sw = RES_ERROR;
-	fdtab[fd].state = FD_STERROR;
-    }
-
-    /* We don't want to re-arm read/write timeouts if we're trying to connect,
-     * otherwise it could loop indefinitely !
-     */
-    if (s->srv_state != SV_STCONN) {
-	if (s->proxy->srvtimeout) {
-	    tv_delayfrom(&s->swexpire, &now, s->proxy->srvtimeout);
-	    /* FIXME: to prevent the server from expiring read timeouts during writes,
-	     * we refresh it. A solution would be to merge read+write+connect timeouts
-	     * into a unique one since we don't mind expiring on read or write, and none
-	     * of them is enabled while waiting for connect(), although that needs some
-	     * study particularly on full-duplex TCP connections. */
-	    s->srexpire = s->swexpire;
-	}
-	else
-	    tv_eternity(&s->swexpire);
-    }
-
-    task_wakeup(&rq, t);
-    return 0;
-}
-
 
 /*
  * returns a message to the client ; the connection is shut down for read,
@@ -2540,122 +2192,6 @@ void client_return(struct session *s, int len, const char *msg) {
     s->rep->r = s->rep->h = s->rep->lr = s->rep->w = s->rep->data;
     s->rep->r += len;
     s->req->l = 0;
-}
-
-/*
- * send a log for the session when we have enough info about it
- */
-void sess_log(struct session *s) {
-    char pn[INET6_ADDRSTRLEN + strlen(":65535")];
-    struct proxy *p = s->proxy;
-    int log;
-    char *uri;
-    char *pxid;
-    char *srv;
-    struct tm *tm;
-
-    /* This is a first attempt at a better logging system.
-     * For now, we rely on send_log() to provide the date, although it obviously
-     * is the date of the log and not of the request, and most fields are not
-     * computed.
-     */
-
-    log = p->to_log & ~s->logs.logwait;
-
-    if (s->cli_addr.ss_family == AF_INET)
-	inet_ntop(AF_INET,
-		  (const void *)&((struct sockaddr_in *)&s->cli_addr)->sin_addr,
-		  pn, sizeof(pn));
-    else
-	inet_ntop(AF_INET6,
-		  (const void *)&((struct sockaddr_in6 *)(&s->cli_addr))->sin6_addr,
-		  pn, sizeof(pn));
-
-    uri = (log & LW_REQ) ? s->logs.uri ? s->logs.uri : "<BADREQ>" : "";
-    pxid = p->id;
-    srv = (p->to_log & LW_SVID) ? (s->srv != NULL) ? s->srv->id : "<NOSRV>" : "-";
-
-    tm = localtime(&s->logs.tv_accept.tv_sec);
-    if (p->to_log & LW_REQ) {
-	char tmpline[MAX_SYSLOG_LEN], *h;
-	int hdr;
-	
-	h = tmpline;
-	if (p->to_log & LW_REQHDR && (h < tmpline + sizeof(tmpline) - 10)) {
-	    *(h++) = ' ';
-	    *(h++) = '{';
-	    for (hdr = 0; hdr < p->nb_req_cap; hdr++) {
-		if (hdr)
-		    *(h++) = '|';
-		if (s->req_cap[hdr] != NULL)
-		    h = encode_string(h, tmpline + sizeof(tmpline) - 7, '#', hdr_encode_map, s->req_cap[hdr]);
-	    }
-	    *(h++) = '}';
-	}
-
-	if (p->to_log & LW_RSPHDR && (h < tmpline + sizeof(tmpline) - 7)) {
-	    *(h++) = ' ';
-	    *(h++) = '{';
-	    for (hdr = 0; hdr < p->nb_rsp_cap; hdr++) {
-		if (hdr)
-		    *(h++) = '|';
-		if (s->rsp_cap[hdr] != NULL)
-		    h = encode_string(h, tmpline + sizeof(tmpline) - 4, '#', hdr_encode_map, s->rsp_cap[hdr]);
-	    }
-	    *(h++) = '}';
-	}
-
-	if (h < tmpline + sizeof(tmpline) - 4) {
-	    *(h++) = ' ';
-	    *(h++) = '"';
-	    h = encode_string(h, tmpline + sizeof(tmpline) - 1, '#', url_encode_map, uri);
-	    *(h++) = '"';
-	}
-	*h = '\0';
-
-	send_log(p, LOG_INFO, "%s:%d [%02d/%s/%04d:%02d:%02d:%02d] %s %s %d/%d/%d/%d/%s%d %d %s%lld %s %s %c%c%c%c %d/%d/%d/%d%s\n",
-		 pn,
-		 (s->cli_addr.ss_family == AF_INET) ?
-		   ntohs(((struct sockaddr_in *)&s->cli_addr)->sin_port) :
-		   ntohs(((struct sockaddr_in6 *)&s->cli_addr)->sin6_port),
-		 tm->tm_mday, monthname[tm->tm_mon], tm->tm_year+1900,
-		 tm->tm_hour, tm->tm_min, tm->tm_sec,
-		 pxid, srv,
-		 s->logs.t_request,
-		 (s->logs.t_queue >= 0) ? s->logs.t_queue - s->logs.t_request : -1,
-		 (s->logs.t_connect >= 0) ? s->logs.t_connect - s->logs.t_queue : -1,
-		 (s->logs.t_data >= 0) ? s->logs.t_data - s->logs.t_connect : -1,
-		 (p->to_log & LW_BYTES) ? "" : "+", s->logs.t_close,
-		 s->logs.status,
-		 (p->to_log & LW_BYTES) ? "" : "+", s->logs.bytes,
-		 s->logs.cli_cookie ? s->logs.cli_cookie : "-",
-		 s->logs.srv_cookie ? s->logs.srv_cookie : "-",
-		 sess_term_cond[(s->flags & SN_ERR_MASK) >> SN_ERR_SHIFT],
-		 sess_fin_state[(s->flags & SN_FINST_MASK) >> SN_FINST_SHIFT],
-		 (p->options & PR_O_COOK_ANY) ? sess_cookie[(s->flags & SN_CK_MASK) >> SN_CK_SHIFT] : '-',
-		 (p->options & PR_O_COOK_ANY) ? sess_set_cookie[(s->flags & SN_SCK_MASK) >> SN_SCK_SHIFT] : '-',
-		 s->srv ? s->srv->cur_sess : 0, s->logs.queue_size,
-		 p->nbconn, actconn, tmpline);
-    }
-    else {
-	send_log(p, LOG_INFO, "%s:%d [%02d/%s/%04d:%02d:%02d:%02d] %s %s %d/%s%d %s%lld %c%c %d/%d/%d/%d\n",
-		 pn,
-		 (s->cli_addr.ss_family == AF_INET) ?
-		   ntohs(((struct sockaddr_in *)&s->cli_addr)->sin_port) :
-		   ntohs(((struct sockaddr_in6 *)&s->cli_addr)->sin6_port),
-		 tm->tm_mday, monthname[tm->tm_mon], tm->tm_year+1900,
-		 tm->tm_hour, tm->tm_min, tm->tm_sec,
-		 pxid, srv,
-		 (s->logs.t_connect >= 0) ? s->logs.t_connect : -1,
-		 (p->to_log & LW_BYTES) ? "" : "+", s->logs.t_close,
-		 (p->to_log & LW_BYTES) ? "" : "+", s->logs.bytes,
-		 sess_term_cond[(s->flags & SN_ERR_MASK) >> SN_ERR_SHIFT],
-		 sess_fin_state[(s->flags & SN_FINST_MASK) >> SN_FINST_SHIFT],
-		 s->srv ? s->srv->cur_sess : 0, s->logs.queue_size,
-		 p->nbconn, actconn);
-    }
-
-    s->logs.logwait = 0;
 }
 
 
@@ -2773,7 +2309,7 @@ int event_accept(int fd) {
 	s->srv_state = SV_STIDLE;
 	s->req = s->rep = NULL; /* will be allocated later */
 
-	s->res_cr = s->res_cw = s->res_sr = s->res_sw = RES_SILENT;
+	s->res_cr = s->res_cw  = RES_SILENT;
 	s->cli_fd = cfd;
 	s->srv_fd = -1;
 	s->srv = NULL;
@@ -2787,48 +2323,9 @@ int event_accept(int fd) {
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
 	s->logs.t_queue = -1;
-	s->logs.t_connect = -1;
-	s->logs.t_data = -1;
-	s->logs.t_close = 0;
-	s->logs.uri = NULL;
-	s->logs.cli_cookie = NULL;
-	s->logs.srv_cookie = NULL;
-	s->logs.status = -1;
-	s->logs.bytes = 0;
-	s->logs.queue_size = p->totpend;  /* we get the number of pending conns before us */
 
 	s->uniq_id = totalconn;
 	p->cum_conn++;
-
-	if (p->nb_req_cap > 0) {
-	    if ((s->req_cap =
-		 pool_alloc_from(p->req_cap_pool, p->nb_req_cap*sizeof(char *)))
-		== NULL) { /* no memory */
-		close(cfd); /* nothing can be done for this fd without memory */
-		pool_free(task, t);
-		pool_free(session, s);
-		return 0;
-	    }
-	    memset(s->req_cap, 0, p->nb_req_cap*sizeof(char *));
-	}
-	else
-	    s->req_cap = NULL;
-
-	if (p->nb_rsp_cap > 0) {
-	    if ((s->rsp_cap =
-		 pool_alloc_from(p->rsp_cap_pool, p->nb_rsp_cap*sizeof(char *)))
-		== NULL) { /* no memory */
-		if (s->req_cap != NULL)
-		    pool_free_to(p->req_cap_pool, s->req_cap);
-		close(cfd); /* nothing can be done for this fd without memory */
-		pool_free(task, t);
-		pool_free(session, s);
-		return 0;
-	    }
-	    memset(s->rsp_cap, 0, p->nb_rsp_cap*sizeof(char *));
-	}
-	else
-	    s->rsp_cap = NULL;
 
 	if ((p->mode == PR_MODE_TCP || p->mode == PR_MODE_HTTP)
 	    && (p->logfac1 >= 0 || p->logfac2 >= 0)) {
@@ -2839,37 +2336,6 @@ int event_accept(int fd) {
 		!(s->proxy->options & PR_O_TRANSP) ||
 		get_original_dst(cfd, (struct sockaddr_in *)&sockname, &namelen) == -1)
 		getsockname(cfd, (struct sockaddr *)&sockname, &namelen);
-
-	    if (p->to_log) {
-		/* we have the client ip */
-		if (s->logs.logwait & LW_CLIP)
-		    if (!(s->logs.logwait &= ~LW_CLIP))
-			sess_log(s);
-	    }
-	    else if (s->cli_addr.ss_family == AF_INET) {
-		char pn[INET_ADDRSTRLEN], sn[INET_ADDRSTRLEN];
-		if (inet_ntop(AF_INET, (const void *)&((struct sockaddr_in *)&sockname)->sin_addr,
-			      sn, sizeof(sn)) &&
-		    inet_ntop(AF_INET, (const void *)&((struct sockaddr_in *)&s->cli_addr)->sin_addr,
-			      pn, sizeof(pn))) {
-		    send_log(p, LOG_INFO, "Connect from %s:%d to %s:%d (%s/%s)\n",
-			     pn, ntohs(((struct sockaddr_in *)&s->cli_addr)->sin_port),
-			     sn, ntohs(((struct sockaddr_in *)&sockname)->sin_port),
-			     p->id, (p->mode == PR_MODE_HTTP) ? "HTTP" : "TCP");
-		}
-	    }
-	    else {
-		char pn[INET6_ADDRSTRLEN], sn[INET6_ADDRSTRLEN];
-		if (inet_ntop(AF_INET6, (const void *)&((struct sockaddr_in6 *)&sockname)->sin6_addr,
-			      sn, sizeof(sn)) &&
-		    inet_ntop(AF_INET6, (const void *)&((struct sockaddr_in6 *)&s->cli_addr)->sin6_addr,
-			      pn, sizeof(pn))) {
-		    send_log(p, LOG_INFO, "Connect from %s:%d to %s:%d (%s/%s)\n",
-			     pn, ntohs(((struct sockaddr_in6 *)&s->cli_addr)->sin6_port),
-			     sn, ntohs(((struct sockaddr_in6 *)&sockname)->sin6_port),
-			     p->id, (p->mode == PR_MODE_HTTP) ? "HTTP" : "TCP");
-		}
-	    }
 	}
 
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
@@ -2906,10 +2372,6 @@ int event_accept(int fd) {
 	}
 
 	if ((s->req = pool_alloc(buffer)) == NULL) { /* no memory */
-	    if (s->rsp_cap != NULL)
-		pool_free_to(p->rsp_cap_pool, s->rsp_cap);
-	    if (s->req_cap != NULL)
-		pool_free_to(p->req_cap_pool, s->req_cap);
 	    close(cfd); /* nothing can be done for this fd without memory */
 	    pool_free(task, t);
 	    pool_free(session, s);
@@ -2925,10 +2387,6 @@ int event_accept(int fd) {
 
 	if ((s->rep = pool_alloc(buffer)) == NULL) { /* no memory */
 	    pool_free(buffer, s->req);
-	    if (s->rsp_cap != NULL)
-		pool_free_to(p->rsp_cap_pool, s->rsp_cap);
-	    if (s->req_cap != NULL)
-		pool_free_to(p->req_cap_pool, s->req_cap);
 	    close(cfd); /* nothing can be done for this fd without memory */
 	    pool_free(task, t);
 	    pool_free(session, s);
@@ -2966,8 +2424,6 @@ int event_accept(int fd) {
 	fd_insert(cfd);
 
 	tv_eternity(&s->cnexpire);
-	tv_eternity(&s->srexpire);
-	tv_eternity(&s->swexpire);
 	tv_eternity(&s->crexpire);
 	tv_eternity(&s->cwexpire);
 
@@ -3150,9 +2606,6 @@ int process_cli(struct session *t) {
     int c = t->cli_state;
     struct buffer *req = t->req;
     struct buffer *rep = t->rep;
-    int method_checked = 0;
-    appsess *asession_temp = NULL;
-    appsess local_asession;
 
 #ifdef DEBUG_FULL
     fprintf(stderr,"process_cli: c=%s s=%s set(r,w)=%d,%d exp(r,w)=%d.%d,%d.%d\n",
@@ -3170,7 +2623,6 @@ int process_cli(struct session *t) {
 	while (req->lr < req->r) { /* this loop only sees one header at each iteration */
 	    char *ptr;
 	    int delete_header;
-	    char *request_line = NULL;
 	
 	    ptr = req->lr;
 
@@ -3211,7 +2663,6 @@ int process_cli(struct session *t) {
 
 		if (t->flags & SN_CLDENY) {
 		    /* no need to go further */
-		    t->logs.status = 403;
 		    client_retnclose(t, t->proxy->errmsg.len403, t->proxy->errmsg.msg403);
 		    if (!(t->flags & SN_ERR_MASK))
 			t->flags |= SN_ERR_PRXCOND;
@@ -3273,8 +2724,7 @@ int process_cli(struct session *t) {
 		 */
 		//break;
 
-		if (!t->proxy->clitimeout ||
-		    (t->srv_state < SV_STDATA && t->proxy->srvtimeout))
+		if (!t->proxy->clitimeout)
 		    /* If the client has no timeout, or if the server is not ready yet,
 		     * and we know for sure that it can expire, then it's cleaner to
 		     * disable the timeout on the client side so that too low values
@@ -3303,142 +2753,6 @@ int process_cli(struct session *t) {
 		req->lr = ptr + 1; /* \r\r, \n\n, \r[^\n], \n[^\r] */
 	    else
 		req->lr = ptr + 2; /* \r\n or \n\r */
-
-	    /*
-	     * now we know that we have a full header ; we can do whatever
-	     * we want with these pointers :
-	     *   req->h  = beginning of header
-	     *   ptr     = end of header (first \r or \n)
-	     *   req->lr = beginning of next line (next rep->h)
-	     *   req->r  = end of data (not used at this stage)
-	     */
-
-	    if (!method_checked && (t->proxy->appsession_name != NULL) &&
-		((memcmp(req->h, "GET ", 4) == 0) || (memcmp(req->h, "POST ", 4) == 0)) &&
-		((request_line = memchr(req->h, ';', req->lr - req->h)) != NULL)) {
-
-	      /* skip ; */
-	      request_line++;
-
-	      /* look if we have a jsessionid */
-
-	      if (strncasecmp(request_line, t->proxy->appsession_name, t->proxy->appsession_name_len) == 0) {
-
-		/* skip jsessionid= */
-		request_line += t->proxy->appsession_name_len + 1;
-		
-		/* First try if we allready have an appsession */
-		asession_temp = &local_asession;
-		
-		if ((asession_temp->sessid = pool_alloc_from(apools.sessid, apools.ses_msize)) == NULL) {
-		  Alert("Not enough memory process_cli():asession_temp->sessid:calloc().\n");
-		  send_log(t->proxy, LOG_ALERT, "Not enough Memory process_cli():asession_temp->sessid:calloc().\n");
-		  return 0;
-		}
-
-		/* Copy the sessionid */
-		memcpy(asession_temp->sessid, request_line, t->proxy->appsession_len);
-		asession_temp->sessid[t->proxy->appsession_len] = 0;
-		asession_temp->serverid = NULL;
-
-		/* only do insert, if lookup fails */
-		if (chtbl_lookup(&(t->proxy->htbl_proxy), (void *)&asession_temp)) {
-		  if ((asession_temp = pool_alloc(appsess)) == NULL) {
-		    Alert("Not enough memory process_cli():asession:calloc().\n");
-		    send_log(t->proxy, LOG_ALERT, "Not enough memory process_cli():asession:calloc().\n");
-		    return 0;
-		  }
-		  asession_temp->sessid = local_asession.sessid;
-		  asession_temp->serverid = local_asession.serverid;
-		  chtbl_insert(&(t->proxy->htbl_proxy), (void *) asession_temp);
-		} /* end if (chtbl_lookup()) */
-		else {
-		  /*free wasted memory;*/
-		  pool_free_to(apools.sessid, local_asession.sessid);
-		}
-
-		tv_delayfrom(&asession_temp->expire, &now, t->proxy->appsession_timeout);
-		asession_temp->request_count++;
-		
-#if defined(DEBUG_HASH)
-		print_table(&(t->proxy->htbl_proxy));
-#endif
-
-		if (asession_temp->serverid == NULL) {
-		    Alert("Found Application Session without matching server.\n");
-		} else {
-		    struct server *srv = t->proxy->srv;
-		    while (srv) {
-		        if (strcmp(srv->id, asession_temp->serverid) == 0) {
-		            if (srv->state & SRV_RUNNING || t->proxy->options & PR_O_PERSIST) {
-		                /* we found the server and it's usable */
-			        t->flags &= ~SN_CK_MASK;
-			        t->flags |= SN_CK_VALID | SN_DIRECT | SN_ASSIGNED;
-			        t->srv = srv;
-				break;
-		            } else {
-			        t->flags &= ~SN_CK_MASK;
-			        t->flags |= SN_CK_DOWN;
-			    }
-		        } /* end if (strcmp()) */
-		        srv = srv->next;
-		    }/* end while(srv) */
-		}/* end else of if (asession_temp->serverid == NULL) */
-	      }/* end if (strncasecmp(request_line,t->proxy->appsession_name,apssesion_name_len) == 0) */
-	      else {
-		//fprintf(stderr,">>>>>>>>>>>>>>>>>>>>>>NO SESSION\n");
-	      }
-	      method_checked = 1;
-	    } /* end if (!method_checked ...) */
-	    else{
-	      //printf("No Methode-Header with Session-String\n");
-	    }
-	    
-	    if (t->logs.logwait & LW_REQ) {
-		/* we have a complete HTTP request that we must log */
-		int urilen;
-
-		if ((t->logs.uri = pool_alloc(requri)) == NULL) {
-		    Alert("HTTP logging : out of memory.\n");
-		    t->logs.status = 500;
-		    client_retnclose(t, t->proxy->errmsg.len500, t->proxy->errmsg.msg500);
-		    if (!(t->flags & SN_ERR_MASK))
-			t->flags |= SN_ERR_PRXCOND;
-		    if (!(t->flags & SN_FINST_MASK))
-			t->flags |= SN_FINST_R;
-		    return 1;
-		}
-		
-		urilen = ptr - req->h;
-		if (urilen >= REQURI_LEN)
-		    urilen = REQURI_LEN - 1;
-		memcpy(t->logs.uri, req->h, urilen);
-		t->logs.uri[urilen] = 0;
-
-		if (!(t->logs.logwait &= ~LW_REQ))
-		    sess_log(t);
-	    }
-	    else if (t->logs.logwait & LW_REQHDR) {
-		struct cap_hdr *h;
-		int len;
-		for (h = t->proxy->req_cap; h; h = h->next) {
-		    if ((h->namelen + 2 <= ptr - req->h) &&
-			(req->h[h->namelen] == ':') &&
-			(strncasecmp(req->h, h->name, h->namelen) == 0)) {
-
-			if (t->req_cap[h->index] == NULL)
-			    t->req_cap[h->index] = pool_alloc_from(h->pool, h->len + 1);
-
-			len = ptr - (req->h + h->namelen + 2);
-			if (len > h->len)
-			    len = h->len;
-
-			memcpy(t->req_cap[h->index], req->h + h->namelen + 2, len);
-			t->req_cap[h->index][len]=0;
-		    }
-		}
-		
-	    }
 
 	    delete_header = 0;
 
@@ -3497,275 +2811,6 @@ int process_cli(struct session *t) {
 		} while ((exp = exp->next) != NULL);
 		*ptr = term; /* restore the string terminator */
 	    }
-	    
-	    /* Now look for cookies. Conforming to RFC2109, we have to support
-	     * attributes whose name begin with a '$', and associate them with
-	     * the right cookie, if we want to delete this cookie.
-	     * So there are 3 cases for each cookie read :
-	     * 1) it's a special attribute, beginning with a '$' : ignore it.
-	     * 2) it's a server id cookie that we *MAY* want to delete : save
-	     *    some pointers on it (last semi-colon, beginning of cookie...)
-	     * 3) it's an application cookie : we *MAY* have to delete a previous
-	     *    "special" cookie.
-	     * At the end of loop, if a "special" cookie remains, we may have to
-	     * remove it. If no application cookie persists in the header, we
-	     * *MUST* delete it
-	     */
-	    if (!delete_header &&
-		(t->proxy->cookie_name != NULL || t->proxy->capture_name != NULL || t->proxy->appsession_name !=NULL)
-		&& !(t->flags & SN_CLDENY) && (ptr >= req->h + 8)
-		&& (strncasecmp(req->h, "Cookie: ", 8) == 0)) {
-		char *p1, *p2, *p3, *p4;
-		char *del_colon, *del_cookie, *colon;
-		int app_cookies;
-
-		p1 = req->h + 8; /* first char after 'Cookie: ' */
-		colon = p1;
-		/* del_cookie == NULL => nothing to be deleted */
-		del_colon = del_cookie = NULL;
-		app_cookies = 0;
-		
-		while (p1 < ptr) {
-		    /* skip spaces and colons, but keep an eye on these ones */
-		    while (p1 < ptr) {
-			if (*p1 == ';' || *p1 == ',')
-			    colon = p1;
-			else if (!isspace((int)*p1))
-			    break;
-			p1++;
-		    }
-		    
-		    if (p1 == ptr)
-			break;
-		    
-		    /* p1 is at the beginning of the cookie name */
-		    p2 = p1;
-		    while (p2 < ptr && *p2 != '=')
-			p2++;
-		    
-		    if (p2 == ptr)
-			break;
-
-		    p3 = p2 + 1; /* skips the '=' sign */
-		    if (p3 == ptr)
-			break;
-		    
-		    p4 = p3;
-		    while (p4 < ptr && !isspace((int)*p4) && *p4 != ';' && *p4 != ',')
-			p4++;
-		    
-		    /* here, we have the cookie name between p1 and p2,
-		     * and its value between p3 and p4.
-		     * we can process it :
-		     *
-		     * Cookie: NAME=VALUE;
-		     * |      ||   ||    |
-		     * |      ||   ||    +--> p4
-		     * |      ||   |+-------> p3
-		     * |      ||   +--------> p2
-		     * |      |+------------> p1
-		     * |      +-------------> colon
-		     * +--------------------> req->h
-		     */
-		    
-		    if (*p1 == '$') {
-			/* skip this one */
-		    }
-		    else {
-			/* first, let's see if we want to capture it */
-			if (t->proxy->capture_name != NULL &&
-			    t->logs.cli_cookie == NULL &&
-			    (p4 - p1 >= t->proxy->capture_namelen) &&
-			    memcmp(p1, t->proxy->capture_name, t->proxy->capture_namelen) == 0) {
-			    int log_len = p4 - p1;
-
-			    if ((t->logs.cli_cookie = pool_alloc(capture)) == NULL) {
-				Alert("HTTP logging : out of memory.\n");
-			    } else {
-				if (log_len > t->proxy->capture_len)
-				    log_len = t->proxy->capture_len;
-				memcpy(t->logs.cli_cookie, p1, log_len);
-				t->logs.cli_cookie[log_len] = 0;
-			    }
-			}
-
-			if ((p2 - p1 == t->proxy->cookie_len) && (t->proxy->cookie_name != NULL) &&
-			    (memcmp(p1, t->proxy->cookie_name, p2 - p1) == 0)) {
-			    /* Cool... it's the right one */
-			    struct server *srv = t->proxy->srv;
-			    char *delim;
-
-			    /* if we're in cookie prefix mode, we'll search the delimitor so that we
-			     * have the server ID betweek p3 and delim, and the original cookie between
-			     * delim+1 and p4. Otherwise, delim==p4 :
-			     *
-			     * Cookie: NAME=SRV~VALUE;
-			     * |      ||   ||  |     |
-			     * |      ||   ||  |     +--> p4
-			     * |      ||   ||  +--------> delim
-			     * |      ||   |+-----------> p3
-			     * |      ||   +------------> p2
-			     * |      |+----------------> p1
-			     * |      +-----------------> colon
-			     * +------------------------> req->h
-			     */
-
-			    if (t->proxy->options & PR_O_COOK_PFX) {
-				for (delim = p3; delim < p4; delim++)
-				    if (*delim == COOKIE_DELIM)
-					break;
-			    }
-			    else
-				delim = p4;
-
-
-			    /* Here, we'll look for the first running server which supports the cookie.
-			     * This allows to share a same cookie between several servers, for example
-			     * to dedicate backup servers to specific servers only.
-			     */
-			    while (srv) {
-				if ((srv->cklen == delim - p3) && !memcmp(p3, srv->cookie, delim - p3)) {
-				    if (srv->state & SRV_RUNNING || t->proxy->options & PR_O_PERSIST) {
-					/* we found the server and it's usable */
-					t->flags &= ~SN_CK_MASK;
-					t->flags |= SN_CK_VALID | SN_DIRECT | SN_ASSIGNED;
-					t->srv = srv;
-					break;
-				    } else {
-					/* we found a server, but it's down */
-					t->flags &= ~SN_CK_MASK;
-					t->flags |= SN_CK_DOWN;
-				    }
-				}
-				srv = srv->next;
-			    }
-
-			    if (!srv && !(t->flags & SN_CK_DOWN)) {
-				/* no server matched this cookie */
-				t->flags &= ~SN_CK_MASK;
-				t->flags |= SN_CK_INVALID;
-			    }
-
-			    /* depending on the cookie mode, we may have to either :
-			     * - delete the complete cookie if we're in insert+indirect mode, so that
-			     *   the server never sees it ;
-			     * - remove the server id from the cookie value, and tag the cookie as an
-			     *   application cookie so that it does not get accidentely removed later,
-			     *   if we're in cookie prefix mode
-			     */
-			    if ((t->proxy->options & PR_O_COOK_PFX) && (delim != p4)) {
-				buffer_replace2(req, p3, delim + 1, NULL, 0);
-				p4  -= (delim + 1 - p3);
-				ptr -= (delim + 1 - p3);
-				del_cookie = del_colon = NULL;
-				app_cookies++;	/* protect the header from deletion */
-			    }
-			    else if (del_cookie == NULL &&
-				(t->proxy->options & (PR_O_COOK_INS | PR_O_COOK_IND)) == (PR_O_COOK_INS | PR_O_COOK_IND)) {
-				del_cookie = p1;
-				del_colon = colon;
-			    }
-			} else {
-			    /* now we know that we must keep this cookie since it's
-			     * not ours. But if we wanted to delete our cookie
-			     * earlier, we cannot remove the complete header, but we
-			     * can remove the previous block itself.
-			     */
-			    app_cookies++;
-			    
-			    if (del_cookie != NULL) {
-				buffer_replace2(req, del_cookie, p1, NULL, 0);
-				p4  -= (p1 - del_cookie);
-				ptr -= (p1 - del_cookie);
-				del_cookie = del_colon = NULL;
-			    }
-			}
-			
-			if ((t->proxy->appsession_name != NULL) &&
-				  (memcmp(p1, t->proxy->appsession_name, p2 - p1) == 0)) {
-			    /* first, let's see if the cookie is our appcookie*/
-			    
-			    /* Cool... it's the right one */
-
-			    asession_temp = &local_asession;
-			  
-			    if ((asession_temp->sessid = pool_alloc_from(apools.sessid, apools.ses_msize)) == NULL) {
-				Alert("Not enough memory process_cli():asession->sessid:malloc().\n");
-				send_log(t->proxy, LOG_ALERT, "Not enough memory process_cli():asession->sessid:malloc().\n");
-				return 0;
-			    }
-			  
-			    memcpy(asession_temp->sessid, p3, t->proxy->appsession_len);
-			    asession_temp->sessid[t->proxy->appsession_len] = 0;
-			    asession_temp->serverid = NULL;
-			    
-			    /* only do insert, if lookup fails */
-			    if (chtbl_lookup(&(t->proxy->htbl_proxy), (void *) &asession_temp) != 0) {
-				if ((asession_temp = pool_alloc(appsess)) == NULL) {
-				    Alert("Not enough memory process_cli():asession:calloc().\n");
-				    send_log(t->proxy, LOG_ALERT, "Not enough memory process_cli():asession:calloc().\n");
-				    return 0;
-				}
-				
-				asession_temp->sessid = local_asession.sessid;
-				asession_temp->serverid = local_asession.serverid;
-				chtbl_insert(&(t->proxy->htbl_proxy), (void *) asession_temp);
-			    }
-			    else{
-				/* free wasted memory */
-				pool_free_to(apools.sessid, local_asession.sessid);
-			    }
-			    
-			    if (asession_temp->serverid == NULL) {
-				Alert("Found Application Session without matching server.\n");
-			    } else {
-				struct server *srv = t->proxy->srv;
-				while (srv) {
-				    if (strcmp(srv->id, asession_temp->serverid) == 0) {
-					if (srv->state & SRV_RUNNING || t->proxy->options & PR_O_PERSIST) {
-					    /* we found the server and it's usable */
-					    t->flags &= ~SN_CK_MASK;
-					    t->flags |= SN_CK_VALID | SN_DIRECT | SN_ASSIGNED;
-					    t->srv = srv;
-					    break;
-					} else {
-					    t->flags &= ~SN_CK_MASK;
-					    t->flags |= SN_CK_DOWN;
-					}
-				    }
-				    srv = srv->next;
-				}/* end while(srv) */
-			    }/* end else if server == NULL */
-			    
-			    tv_delayfrom(&asession_temp->expire, &now, t->proxy->appsession_timeout);
-			}/* end if ((t->proxy->appsession_name != NULL) ... */
-		    }
-
-		    /* we'll have to look for another cookie ... */
-		    p1 = p4;
-		} /* while (p1 < ptr) */
-
-		/* There's no more cookie on this line.
-		 * We may have marked the last one(s) for deletion.
-		 * We must do this now in two ways :
-		 *  - if there is no app cookie, we simply delete the header ;
-		 *  - if there are app cookies, we must delete the end of the
-		 *    string properly, including the colon/semi-colon before
-		 *    the cookie name.
-		 */
-		if (del_cookie != NULL) {
-		    if (app_cookies) {
-			buffer_replace2(req, del_colon, ptr, NULL, 0);
-			/* WARNING! <ptr> becomes invalid for now. If some code
-			 * below needs to rely on it before the end of the global
-			 * header loop, we need to correct it with this code :
-			 * ptr = del_colon;
-			 */
-		    }
-		    else
-			delete_header = 1;
-		}
-	    } /* end of cookie processing on this header */
 
 	    /* let's look if we have to delete this header */
 	    if (delete_header && !(t->flags & SN_CLDENY)) {
@@ -3794,7 +2839,6 @@ int process_cli(struct session *t) {
 	 * won't be able to free more later, so the session will never terminate.
 	 */
 	if (req->l >= req->rlim - req->data) {
-	    t->logs.status = 400;
 	    client_retnclose(t, t->proxy->errmsg.len400, t->proxy->errmsg.msg400);
 	    if (!(t->flags & SN_ERR_MASK))
 		t->flags |= SN_ERR_PRXCOND;
@@ -3817,7 +2861,6 @@ int process_cli(struct session *t) {
 
 	    /* read timeout : give up with an error message.
 	     */
-	    t->logs.status = 408;
 	    client_retnclose(t, t->proxy->errmsg.len408, t->proxy->errmsg.msg408);
 	    if (!(t->flags & SN_ERR_MASK))
 		t->flags |= SN_ERR_CLITO;
@@ -3912,8 +2955,7 @@ int process_cli(struct session *t) {
 	    /* there's still some space in the buffer */
 	    if (! FD_ISSET(t->cli_fd, StaticReadEvent)) {
 		FD_SET(t->cli_fd, StaticReadEvent);
-		if (!t->proxy->clitimeout ||
-		    (t->srv_state < SV_STDATA && t->proxy->srvtimeout))
+		if (!t->proxy->clitimeout)
 		    /* If the client has no timeout, or if the server not ready yet, and we
 		     * know for sure that it can expire, then it's cleaner to disable the
 		     * timeout on the client side so that too low values cannot make the
@@ -4065,23 +3107,6 @@ int process_cli(struct session *t) {
  * indicators accordingly. Note that if <status> is 0, no message is
  * returned.
  */
-void srv_close_with_err(struct session *t, int err, int finst, int status, int msglen, char *msg) {
-    t->srv_state = SV_STCLOSE;
-    if (status > 0) {
-	t->logs.status = status;
-	if (t->proxy->mode == PR_MODE_HTTP)
-	    client_return(t, msglen, msg);
-    }
-    if (!(t->flags & SN_ERR_MASK))
-	t->flags |= err;
-    if (!(t->flags & SN_FINST_MASK))
-	t->flags |= finst;
-}
-
-/* This function turns the server state into the SV_STCLOSE, and sets
- * indicators accordingly. Note that if <status> is 0, no message is
- * returned.
- */
 void srv_return_page(struct session *t, int err, int finst) {
     int hlen;
     struct server *srv;
@@ -4089,7 +3114,6 @@ void srv_return_page(struct session *t, int err, int finst) {
     t->srv_state = SV_STCLOSE;
     srv = t->srv;
 
-    t->logs.status = srv->resp_code;
     hlen = sprintf(t->rep->data,
 		   "HTTP/1.0 %03d\r\n"
 		   "Connection: close\r\n"
@@ -4131,7 +3155,11 @@ int process_srv(struct session *t) {
 		 c == CL_STSHUTW ||
 		 (c == CL_STSHUTR && t->req->l == 0)) { /* give up */
 	    tv_eternity(&t->cnexpire);
-	    srv_close_with_err(t, SN_ERR_CLICL, SN_FINST_C, 0, 0, NULL);
+	    t->srv_state = SV_STCLOSE;
+	    if (!(t->flags & SN_ERR_MASK))
+		t->flags |= SN_ERR_CLICL;
+	    if (!(t->flags & SN_FINST_MASK))
+		t->flags |= SN_FINST_C;
 	    return 1;
 	}
 	else {
@@ -4195,13 +3223,11 @@ int process_session(struct task *t) {
     } while (fsm_resync);
 
     if (s->cli_state != CL_STCLOSE || s->srv_state != SV_STCLOSE) {
-	struct timeval min1, min2;
-	s->res_cw = s->res_cr = s->res_sw = s->res_sr = RES_SILENT;
+	struct timeval min1;
+	s->res_cw = s->res_cr = RES_SILENT;
 
 	tv_min(&min1, &s->crexpire, &s->cwexpire);
-	tv_min(&min2, &s->srexpire, &s->swexpire);
-	tv_min(&min1, &min1, &s->cnexpire);
-	tv_min(&t->expire, &min1, &min2);
+	tv_min(&t->expire, &min1, &s->cnexpire);
 
 	/* restore t to its place in the task list */
 	task_queue(t);
@@ -4226,14 +3252,6 @@ int process_session(struct task *t) {
 	write(1, trash, len);
     }
 
-    s->logs.t_close = tv_diff(&s->logs.tv_accept, &now);
-    if (s->rep != NULL)
-	s->logs.bytes = s->rep->total;
-
-    /* let's do a final log if we need it */
-    if (s->logs.logwait && (!(s->proxy->options & PR_O_NULLNOLOG) || s->req->total))
-	sess_log(s);
-
     /* the task MUST not be in the run queue anymore */
     task_delete(t);
     session_free(s);
@@ -4247,7 +3265,6 @@ int process_session(struct task *t) {
  * This does 4 things :
  *   - wake up all expired tasks
  *   - call all runnable tasks
- *   - call maintain_proxies() to enable/disable the listeners
  *   - return the delay till next event in ms, -1 = wait indefinitely
  * Note: this part should be rewritten with the O(ln(n)) scheduler.
  *
@@ -4255,7 +3272,6 @@ int process_session(struct task *t) {
 
 int process_runnable_tasks() {
   int next_time;
-  int time2;
   struct task *t, *tnext;
 
   next_time = TIME_ETERNITY; /* set the timer to wait eternally first */
@@ -4298,10 +3314,7 @@ int process_runnable_tasks() {
       temp_time = t->process(t);
       next_time = MINTIME(temp_time, next_time);
   }
-  
-  /* maintain all proxies in a consistent state. This should quickly become a task */
-  time2 = maintain_proxies();
-  return MINTIME(time2, next_time);
+  return next_time;
 }
 
 
@@ -4775,203 +3788,6 @@ int stats(void) {
 
 
 /*
- * this function enables proxies when there are enough free sessions,
- * or stops them when the table is full. It is designed to be called from the
- * select_loop(). It returns the time left before next expiration event
- * during stop time, TIME_ETERNITY otherwise.
- */
-static int maintain_proxies(void) {
-    struct proxy *p;
-    struct listener *l;
-    int tleft; /* time left */
-
-    p = proxy;
-    tleft = TIME_ETERNITY; /* infinite time */
-
-    /* if there are enough free sessions, we'll activate proxies */
-    if (actconn < global.maxconn) {
-	while (p) {
-	    if (p->nbconn < p->maxconn) {
-		if (p->state == PR_STIDLE) {
-		    for (l = p->listen; l != NULL; l = l->next) {
-			FD_SET(l->fd, StaticReadEvent);
-		    }
-		    p->state = PR_STRUN;
-		}
-	    }
-	    else {
-		if (p->state == PR_STRUN) {
-		    for (l = p->listen; l != NULL; l = l->next) {
-			FD_CLR(l->fd, StaticReadEvent);
-		    }
-		    p->state = PR_STIDLE;
-		}
-	    }
-	    p = p->next;
-	}
-    }
-    else {  /* block all proxies */
-	while (p) {
-	    if (p->state == PR_STRUN) {
-		for (l = p->listen; l != NULL; l = l->next) {
-		    FD_CLR(l->fd, StaticReadEvent);
-		}
-		p->state = PR_STIDLE;
-	    }
-	    p = p->next;
-	}
-    }
-
-    if (stopping) {
-	p = proxy;
-	while (p) {
-	    if (p->state != PR_STSTOPPED) {
-		int t;
-		t = tv_remain2(&now, &p->stop_time);
-		if (t == 0) {
-		    Warning("Proxy %s stopped.\n", p->id);
-		    send_log(p, LOG_WARNING, "Proxy %s stopped.\n", p->id);
-
-		    for (l = p->listen; l != NULL; l = l->next) {
-			fd_delete(l->fd);
-			listeners--;
-		    }
-		    p->state = PR_STSTOPPED;
-		}
-		else {
-		    tleft = MINTIME(t, tleft);
-		}
-	    }
-	    p = p->next;
-	}
-    }
-    return tleft;
-}
-
-/*
- * this function disables health-check servers so that the process will quickly be ignored
- * by load balancers. Note that if a proxy was already in the PAUSED state, then its grace
- * time will not be used since it would already not listen anymore to the socket.
- */
-static void soft_stop(void) {
-    struct proxy *p;
-
-    stopping = 1;
-    p = proxy;
-    tv_now(&now); /* else, the old time before select will be used */
-    while (p) {
-	if (p->state != PR_STSTOPPED) {
-	    Warning("Stopping proxy %s in %d ms.\n", p->id, p->grace);
-	    send_log(p, LOG_WARNING, "Stopping proxy %s in %d ms.\n", p->id, p->grace);
-	    tv_delayfrom(&p->stop_time, &now, p->grace);
-	}
-	p = p->next;
-    }
-}
-
-static void pause_proxy(struct proxy *p) {
-    struct listener *l;
-    for (l = p->listen; l != NULL; l = l->next) {
-	shutdown(l->fd, SHUT_RD);
-	FD_CLR(l->fd, StaticReadEvent);
-	p->state = PR_STPAUSED;
-    }
-}
-
-/*
- * This function temporarily disables listening so that another new instance
- * can start listening. It is designed to be called upon reception of a
- * SIGTTOU, after which either a SIGUSR1 can be sent to completely stop
- * the proxy, or a SIGTTIN can be sent to listen again.
- */
-static void pause_proxies(void) {
-    struct proxy *p;
-
-    p = proxy;
-    tv_now(&now); /* else, the old time before select will be used */
-    while (p) {
-	if (p->state != PR_STSTOPPED && p->state != PR_STPAUSED) {
-	    Warning("Pausing proxy %s.\n", p->id);
-	    send_log(p, LOG_WARNING, "Pausing proxy %s.\n", p->id);
-	    pause_proxy(p);
-	}
-	p = p->next;
-    }
-}
-
-
-/*
- * This function reactivates listening. This can be used after a call to
- * sig_pause(), for example when a new instance has failed starting up.
- * It is designed to be called upon reception of a SIGTTIN.
- */
-static void listen_proxies(void) {
-    struct proxy *p;
-    struct listener *l;
-
-    p = proxy;
-    tv_now(&now); /* else, the old time before select will be used */
-    while (p) {
-	if (p->state == PR_STPAUSED) {
-	    Warning("Enabling proxy %s.\n", p->id);
-	    send_log(p, LOG_WARNING, "Enabling proxy %s.\n", p->id);
-
-	    for (l = p->listen; l != NULL; l = l->next) {
-		if (listen(l->fd, p->maxconn) == 0) {
-		    if (actconn < global.maxconn && p->nbconn < p->maxconn) {
-			FD_SET(l->fd, StaticReadEvent);
-			p->state = PR_STRUN;
-		    }
-		    else
-			p->state = PR_STIDLE;
-		} else {
-		    int port;
-
-		    if (l->addr.ss_family == AF_INET6)
-			port = ntohs(((struct sockaddr_in6 *)(&l->addr))->sin6_port);
-		    else
- 			port = ntohs(((struct sockaddr_in *)(&l->addr))->sin_port);
-
-		    Warning("Port %d busy while trying to enable proxy %s.\n",
-			    port, p->id);
-		    send_log(p, LOG_WARNING, "Port %d busy while trying to enable proxy %s.\n",
-			     port, p->id);
-		    /* Another port might have been enabled. Let's stop everything. */
-		    pause_proxy(p);
-		    break;
-		}
-	    }
-	}
-	p = p->next;
-    }
-}
-
-
-/*
- * upon SIGUSR1, let's have a soft stop.
- */
-void sig_soft_stop(int sig) {
-    soft_stop();
-    signal(sig, SIG_IGN);
-}
-
-/*
- * upon SIGTTOU, we pause everything
- */
-void sig_pause(int sig) {
-    pause_proxies();
-    signal(sig, sig_pause);
-}
-
-/*
- * upon SIGTTIN, let's have a soft stop.
- */
-void sig_listen(int sig) {
-    listen_proxies();
-    signal(sig, sig_listen);
-}
-
-/*
  * this function dumps every server's state when the process receives SIGHUP.
  */
 void sig_dump_state(int sig) {
@@ -4987,7 +3803,7 @@ void sig_dump_state(int sig) {
 		     "SIGHUP: Server %s/%s is %s. Conn: %d act, %d pend, %d tot.",
 		     p->id, s->id,
 		     (s->state & SRV_RUNNING) ? "UP" : "DOWN",
-		     s->cur_sess, s->nbpend, s->cum_sess);
+		     s->cur_sess, 0, s->cum_sess);
 	    Warning("%s\n", trash);
 	    send_log(p, LOG_NOTICE, "%s\n", trash);
 	    s = s->next;
@@ -4998,13 +3814,13 @@ void sig_dump_state(int sig) {
 		     "SIGHUP: Proxy %s %s ! Conn: %d act, %d pend (%d unass), %d tot.",
 		     p->id,
 		     (p->srv_bck) ? "is running on backup servers" : "has no server available",
-		     p->nbconn, p->totpend, p->nbpend,  p->cum_conn);
+		     p->nbconn, 0, 0,  p->cum_conn);
         } else {
 	    snprintf(trash, sizeof(trash),
 		     "SIGHUP: Proxy %s has %d active servers and %d backup servers available."
 		     " Conn: %d act, %d pend (%d unass), %d tot.",
 		     p->id, p->srv_act, p->srv_bck,
-		     p->nbconn, p->totpend, p->nbpend,  p->cum_conn);
+		     p->nbconn, 0, 0, p->cum_conn);
 	}
 	Warning("%s\n", trash);
 	send_log(p, LOG_NOTICE, "%s\n", trash);
@@ -5296,7 +4112,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	
 	curproxy->next = proxy;
 	proxy = curproxy;
-	LIST_INIT(&curproxy->pendconns);
 
 	curproxy->id = strdup(args[1]);
 
@@ -5317,15 +4132,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	if (defproxy.check_req)
 	    curproxy->check_req = strdup(defproxy.check_req);
 	curproxy->check_len = defproxy.check_len;
-
-	if (defproxy.cookie_name)
-	    curproxy->cookie_name = strdup(defproxy.cookie_name);
-	curproxy->cookie_len = defproxy.cookie_len;
-
-	if (defproxy.capture_name)
-	    curproxy->capture_name = strdup(defproxy.capture_name);
-	curproxy->capture_namelen = defproxy.capture_namelen;
-	curproxy->capture_len = defproxy.capture_len;
 
 	if (defproxy.errmsg.msg400)
 	    curproxy->errmsg.msg400 = strdup(defproxy.errmsg.msg400);
@@ -5356,8 +4162,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->errmsg.len504 = defproxy.errmsg.len504;
 
 	curproxy->clitimeout = defproxy.clitimeout;
-	curproxy->contimeout = defproxy.contimeout;
-	curproxy->srvtimeout = defproxy.srvtimeout;
 	curproxy->mode = PR_MODE_HTTP;
 	curproxy->logfac1 = defproxy.logfac1;
 	curproxy->logsrv1 = defproxy.logsrv1;
@@ -5365,7 +4169,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->logfac2 = defproxy.logfac2;
 	curproxy->logsrv2 = defproxy.logsrv2;
 	curproxy->loglev2 = defproxy.loglev2;
-	curproxy->to_log = defproxy.to_log & ~LW_COOKIE & ~LW_REQHDR & ~ LW_RSPHDR;
+	curproxy->to_log = defproxy.to_log;
 	curproxy->grace  = defproxy.grace;
 	curproxy->source_addr = defproxy.source_addr;
 	curproxy->mon_net = defproxy.mon_net;
@@ -5375,8 +4179,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
     else if (!strcmp(args[0], "defaults")) {  /* use this one to assign default values */
 	/* some variables may have already been initialized earlier */
 	if (defproxy.check_req)     free(defproxy.check_req);
-	if (defproxy.cookie_name)   free(defproxy.cookie_name);
-	if (defproxy.capture_name)  free(defproxy.capture_name);
 	if (defproxy.errmsg.msg400) free(defproxy.errmsg.msg400);
 	if (defproxy.errmsg.msg403) free(defproxy.errmsg.msg403);
 	if (defproxy.errmsg.msg408) free(defproxy.errmsg.msg408);
@@ -5427,190 +4229,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
     else if (!strcmp(args[0], "enabled")) {  /* enables this proxy (used to revert a disabled default) */
 	curproxy->state = PR_STNEW;
     }
-#if 0
-    else if (!strcmp(args[0], "cookie")) {  /* cookie name */
-	int cur_arg;
-//	  if (curproxy == &defproxy) {
-//	      Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-//	      return -1;
-//	  }
-
-	if (curproxy->cookie_name != NULL) {
-//	      Alert("parsing [%s:%d] : cookie name already specified. Continuing.\n",
-//		    file, linenum);
-//	      return 0;
-	    free(curproxy->cookie_name);
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <cookie_name> as argument.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	curproxy->cookie_name = strdup(args[1]);
-	curproxy->cookie_len = strlen(curproxy->cookie_name);
-	
-	cur_arg = 2;
-	while (*(args[cur_arg])) {
-	    if (!strcmp(args[cur_arg], "rewrite")) {
-		curproxy->options |= PR_O_COOK_RW;
-	    }
-	    else if (!strcmp(args[cur_arg], "indirect")) {
-		curproxy->options |= PR_O_COOK_IND;
-	    }
-	    else if (!strcmp(args[cur_arg], "insert")) {
-		curproxy->options |= PR_O_COOK_INS;
-	    }
-	    else if (!strcmp(args[cur_arg], "nocache")) {
-		curproxy->options |= PR_O_COOK_NOC;
-	    }
-	    else if (!strcmp(args[cur_arg], "postonly")) {
-		curproxy->options |= PR_O_COOK_POST;
-	    }
-	    else if (!strcmp(args[cur_arg], "prefix")) {
-		curproxy->options |= PR_O_COOK_PFX;
-	    }
-	    else {
-		Alert("parsing [%s:%d] : '%s' supports 'rewrite', 'insert', 'prefix', 'indirect', 'nocache' and 'postonly' options.\n",
-		      file, linenum, args[0]);
-		return -1;
-	    }
-	    cur_arg++;
-	}
-	if (!POWEROF2(curproxy->options & (PR_O_COOK_RW|PR_O_COOK_IND))) {
-	    Alert("parsing [%s:%d] : cookie 'rewrite' and 'indirect' modes are incompatible.\n",
-		  file, linenum);
-	    return -1;
-	}
-
-	if (!POWEROF2(curproxy->options & (PR_O_COOK_RW|PR_O_COOK_INS|PR_O_COOK_PFX))) {
-	    Alert("parsing [%s:%d] : cookie 'rewrite', 'insert' and 'prefix' modes are incompatible.\n",
-		  file, linenum);
-	    return -1;
-	}
-    }/* end else if (!strcmp(args[0], "cookie"))  */
-    else if (!strcmp(args[0], "appsession")) {  /* cookie name */
-//	  if (curproxy == &defproxy) {
-//	      Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-//	      return -1;
-//	  }
-
-	if (curproxy->appsession_name != NULL) {
-//	      Alert("parsing [%s:%d] : cookie name already specified. Continuing.\n",
-//		    file, linenum);
-//	      return 0;
-	    free(curproxy->appsession_name);
-	}
-	
-	if (*(args[5]) == 0) {
-	  Alert("parsing [%s:%d] : '%s' expects 'appsession' <cookie_name> 'len' <len> 'timeout' <timeout>.\n",
-		file, linenum, args[0]);
-	  return -1;
-	}
-	have_appsession = 1;
-	curproxy->appsession_name = strdup(args[1]);
-	curproxy->appsession_name_len = strlen(curproxy->appsession_name);
-	curproxy->appsession_len = atoi(args[3]);
-	curproxy->appsession_timeout = atoi(args[5]);
-	rc = chtbl_init(&(curproxy->htbl_proxy), TBLSIZ, hashpjw, match_str, destroy);
-	if (rc) {
-	    Alert("Error Init Appsession Hashtable.\n");
-	    return -1;
-	}
-    } /* Url App Session */
-    else if (!strcmp(args[0], "capture")) {
-	if (!strcmp(args[1], "cookie")) {  /* name of a cookie to capture */
-	    //	  if (curproxy == &defproxy) {
-	    //	      Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    //	      return -1;
-	    //	  }
-
-	    if (curproxy->capture_name != NULL) {
-		//     Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n",
-		//           file, linenum, args[0]);
-		//     return 0;
-		free(curproxy->capture_name);
-	    }
-	
-	    if (*(args[4]) == 0) {
-		Alert("parsing [%s:%d] : '%s' expects 'cookie' <cookie_name> 'len' <len>.\n",
-		      file, linenum, args[0]);
-		return -1;
-	    }
-	    curproxy->capture_name = strdup(args[2]);
-	    curproxy->capture_namelen = strlen(curproxy->capture_name);
-	    curproxy->capture_len = atol(args[4]);
-	    if (curproxy->capture_len >= CAPTURE_LEN) {
-		Warning("parsing [%s:%d] : truncating capture length to %d bytes.\n",
-			file, linenum, CAPTURE_LEN - 1);
-		curproxy->capture_len = CAPTURE_LEN - 1;
-	    }
-	    curproxy->to_log |= LW_COOKIE;
-	}
-	else if (!strcmp(args[1], "request") && !strcmp(args[2], "header")) {
-	    struct cap_hdr *hdr;
-
-	    if (curproxy == &defproxy) {
-		Alert("parsing [%s:%d] : '%s %s' not allowed in 'defaults' section.\n", file, linenum, args[0], args[1]);
-		return -1;
-	    }
-
-	    if (*(args[3]) == 0 || strcmp(args[4], "len") != 0 || *(args[5]) == 0) {
-		Alert("parsing [%s:%d] : '%s %s' expects 'header' <header_name> 'len' <len>.\n",
-		      file, linenum, args[0], args[1]);
-		return -1;
-	    }
-
-	    hdr = calloc(sizeof(struct cap_hdr), 1);
-	    hdr->next = curproxy->req_cap;
-	    hdr->name = strdup(args[3]);
-	    hdr->namelen = strlen(args[3]);
-	    hdr->len = atol(args[5]);
-	    hdr->index = curproxy->nb_req_cap++;
-	    curproxy->req_cap = hdr;
-	    curproxy->to_log |= LW_REQHDR;
-	}
-	else if (!strcmp(args[1], "response") && !strcmp(args[2], "header")) {
-	    struct cap_hdr *hdr;
-
-	    if (curproxy == &defproxy) {
-		Alert("parsing [%s:%d] : '%s %s' not allowed in 'defaults' section.\n", file, linenum, args[0], args[1]);
-		return -1;
-	    }
-
-	    if (*(args[3]) == 0 || strcmp(args[4], "len") != 0 || *(args[5]) == 0) {
-		Alert("parsing [%s:%d] : '%s %s' expects 'header' <header_name> 'len' <len>.\n",
-		      file, linenum, args[0], args[1]);
-		return -1;
-	    }
-	    hdr = calloc(sizeof(struct cap_hdr), 1);
-	    hdr->next = curproxy->rsp_cap;
-	    hdr->name = strdup(args[3]);
-	    hdr->namelen = strlen(args[3]);
-	    hdr->len = atol(args[5]);
-	    hdr->index = curproxy->nb_rsp_cap++;
-	    curproxy->rsp_cap = hdr;
-	    curproxy->to_log |= LW_RSPHDR;
-	}
-	else {
-	    Alert("parsing [%s:%d] : '%s' expects 'cookie' or 'request header' or 'response header'.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "contimeout")) {  /* connect timeout */
-	if (curproxy->contimeout != defproxy.contimeout) {
-	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
-	    return 0;
-	}
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects an integer <time_in_ms> as argument.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	curproxy->contimeout = atol(args[1]);
-    }
-#endif
     else if (!strcmp(args[0], "clitimeout")) {  /*  client timeout */
 	if (curproxy->clitimeout != defproxy.clitimeout) {
 	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n",
@@ -5624,28 +4242,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	curproxy->clitimeout = atol(args[1]);
     }
-#if 0
-    else if (!strcmp(args[0], "srvtimeout")) {  /*  server timeout */
-	if (curproxy->srvtimeout != defproxy.srvtimeout) {
-	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
-	    return 0;
-	}
-	if (*(args[1]) == 0) {
-		Alert("parsing [%s:%d] : '%s' expects an integer <time_in_ms> as argument.\n",
-		      file, linenum, args[0]);
-		return -1;
-	}
-	curproxy->srvtimeout = atol(args[1]);
-    }
-    else if (!strcmp(args[0], "retries")) {  /* connection retries */
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects an integer argument (dispatch counts for one).\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	curproxy->conn_retries = atol(args[1]);
-    }
-#endif
     else if (!strcmp(args[0], "option")) {
 	if (*(args[1]) == 0) {
 	    Alert("parsing [%s:%d] : '%s' expects an option name.\n", file, linenum, args[0]);
@@ -5654,11 +4250,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	if (!strcmp(args[1], "redispatch"))
 	    /* enable reconnections to dispatch */
 	    curproxy->options |= PR_O_REDISP;
-#ifdef TPROXY
-	else if (!strcmp(args[1], "transparent"))
-	    /* enable transparent proxy connections */
-	    curproxy->options |= PR_O_TRANSP;
-#endif
 	else if (!strcmp(args[1], "keepalive"))
 	    /* enable keep-alive */
 	    curproxy->options |= PR_O_KEEPALIVE;
@@ -5679,10 +4270,10 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	    curproxy->options |= PR_O_CHK_CACHE;
 	else if (!strcmp(args[1], "httplog"))
 	    /* generate a complete HTTP log */
-	    curproxy->to_log |= LW_DATE | LW_CLIP | LW_SVID | LW_REQ | LW_PXID | LW_RESP | LW_BYTES;
+	    curproxy->to_log |= LW_DATE | LW_CLIP | LW_SVID | LW_REQ | LW_PXID | LW_RESP;
 	else if (!strcmp(args[1], "tcplog"))
 	    /* generate a detailed TCP log */
-	    curproxy->to_log |= LW_DATE | LW_CLIP | LW_SVID | LW_PXID | LW_BYTES;
+	    curproxy->to_log |= LW_DATE | LW_CLIP | LW_SVID | LW_PXID;
 	else if (!strcmp(args[1], "dontlognull")) {
 	    /* don't log empty requests */
 	    curproxy->options |= PR_O_NULLNOLOG;
@@ -5739,18 +4330,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	return 0;
     }
-#if 0
-    else if (!strcmp(args[0], "redispatch") || !strcmp(args[0], "redisp")) {
-	/* enable reconnections to dispatch */
-	curproxy->options |= PR_O_REDISP;
-    }
-#ifdef TPROXY
-    else if (!strcmp(args[0], "transparent")) {
-	/* enable transparent proxy connections */
-	curproxy->options |= PR_O_TRANSP;
-    }
-#endif
-#endif
     else if (!strcmp(args[0], "maxconn")) {  /* maxconn */
 	if (*(args[1]) == 0) {
 	    Alert("parsing [%s:%d] : '%s' expects an integer argument.\n", file, linenum, args[0]);
@@ -5789,7 +4368,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->srv = newsrv;
 	newsrv->proxy = curproxy;
 
-	LIST_INIT(&newsrv->pendconns);
 	do_check = 0;
 	newsrv->state = SRV_RUNNING; /* early server setup */
 
@@ -6578,31 +5156,6 @@ int readcfgfile(char *file) {
 			file, curproxy->id);
 	    }
 	}
-	else if (curproxy->mode == PR_MODE_TCP || curproxy->mode == PR_MODE_HEALTH) { /* TCP PROXY or HEALTH CHECK */
-	    if (curproxy->cookie_name != NULL) {
-		Warning("parsing %s : cookie will be ignored for listener %s.\n",
-			file, curproxy->id);
-	    }
-	    if ((newsrv = curproxy->srv) != NULL) {
-		Warning("parsing %s : servers will be ignored for listener %s.\n",
-			file, curproxy->id);
-	    }
-	    if (curproxy->rsp_exp != NULL) {
-		Warning("parsing %s : server regular expressions will be ignored for listener %s.\n",
-			file, curproxy->id);
-	    }
-	    if (curproxy->req_exp != NULL) {
-		Warning("parsing %s : client regular expressions will be ignored for listener %s.\n",
-			file, curproxy->id);
-	    }
-	}
-	else if (curproxy->mode == PR_MODE_HTTP) { /* HTTP PROXY */
-	    if ((curproxy->cookie_name != NULL) && ((newsrv = curproxy->srv) == NULL)) {
-		Alert("parsing %s : HTTP proxy %s has a cookie but no server list !\n",
-		      file, curproxy->id);
-		cfgerr++;
-	    }
-	}
 
 	/* first, we will invert the servers list order */
 	newsrv = NULL;
@@ -6656,9 +5209,6 @@ int readcfgfile(char *file) {
 	    recount_servers(curproxy);
 	    recalc_server_map(curproxy);
 	}
-
-	if (curproxy->options & PR_O_LOGASAP)
-	    curproxy->to_log &= ~LW_BYTES;
 
 	if (curproxy->errmsg.msg400 == NULL) {
 	    curproxy->errmsg.msg400 = (char *)HTTP_400;
@@ -6865,14 +5415,11 @@ void init(int argc, char **argv) {
 
     gethostname(hostname, MAX_HOSTNAME_LEN);
 
-    have_appsession = 0;
     global.maxsock = 10; /* reserve 10 fds ; will be incremented by socket eaters */
     if (readcfgfile(cfg_cfgfile) < 0) {
 	Alert("Error reading configuration file : %s\n", cfg_cfgfile);
 	exit(1);
     }
-    if (have_appsession)
-	appsession_init();
 
     if (global.mode & MODE_CHECK) {
 	qfprintf(stdout, "Configuration file is valid : %s\n", cfg_cfgfile);
@@ -7028,43 +5575,6 @@ int start_proxies(int verbose) {
     return err;
 }
 
-int match_str(const void *key1, const void *key2) {
-
-    appsess *temp1,*temp2;
-    temp1 = (appsess *)key1;
-    temp2 = (appsess *)key2;
-
-    //fprintf(stdout,">>>>>>>>>>>>>>temp1->sessid :%s:\n",temp1->sessid);
-    //fprintf(stdout,">>>>>>>>>>>>>>temp2->sessid :%s:\n",temp2->sessid);
-  
-    return (strcmp(temp1->sessid,temp2->sessid) == 0);
-}/* end match_str */
-
-void destroy(void *data) {
-    appsess *temp1;
-
-    //printf("destroy called\n");
-    temp1 = (appsess *)data;
-
-    if (temp1->sessid)
-	pool_free_to(apools.sessid, temp1->sessid);
-
-    if (temp1->serverid)
-	pool_free_to(apools.serverid, temp1->serverid);
-
-    pool_free(appsess, temp1);
-} /* end destroy */
-
-void appsession_cleanup( void )
-{
-    struct proxy *p = proxy;
-  
-    while(p) {
-	chtbl_destroy(&(p->htbl_proxy));
-	p = p->next;
-    }
-}/* end appsession_cleanup() */
-
 void pool_destroy(void **pool)
 {
     void *temp, *next;
@@ -7078,7 +5588,6 @@ void pool_destroy(void **pool)
 
 void deinit(void) {
     struct proxy *p = proxy;
-    struct cap_hdr *h,*h_next;
     struct server *s,*s_next;
     struct listener *l,*l_next;
   
@@ -7088,12 +5597,6 @@ void deinit(void) {
 
 	if (p->check_req)
 	    free(p->check_req);
-
-	if (p->cookie_name)
-	    free(p->cookie_name);
-
-	if (p->capture_name)
-	    free(p->capture_name);
 
 	/* only strup if the user have set in config.
 	   When should we free it?!
@@ -7105,38 +5608,12 @@ void deinit(void) {
 	   if (p->errmsg.msg503) free(p->errmsg.msg503);
 	   if (p->errmsg.msg504) free(p->errmsg.msg504);
 	*/
-	if (p->appsession_name)
-	    free(p->appsession_name);
 
-	h = p->req_cap;
-	while (h) {
-	    h_next = h->next;
-	    if (h->name)
-		free(h->name);
-	    pool_destroy(h->pool);
-	    free(h);
-	    h = h_next;
-	}/* end while(h) */
-
-	h = p->rsp_cap;
-	while (h) {
-	    h_next = h->next;
-	    if (h->name)
-		free(h->name);
-	    
-	    pool_destroy(h->pool);
-	    free(h);
-	    h = h_next;
-	}/* end while(h) */
-	
 	s = p->srv;
 	while (s) {
 	    s_next = s->next;
 	    if (s->id)
 		free(s->id);
-	    
-	    if (s->cookie)
-		free(s->cookie);
 	    
 	    free(s);
 	    s = s_next;
@@ -7149,8 +5626,6 @@ void deinit(void) {
 	    l = l_next;
 	}/* end while(l) */
 	
-	pool_destroy((void **) p->req_cap_pool);
-	pool_destroy((void **) p->rsp_cap_pool);
 	p = p->next;
     }/* end while(p) */
     
@@ -7164,15 +5639,8 @@ void deinit(void) {
     pool_destroy(pool_session);
     pool_destroy(pool_buffer);
     pool_destroy(pool_fdtab);
-    pool_destroy(pool_requri);
     pool_destroy(pool_task);
-    pool_destroy(pool_capture);
-    pool_destroy(pool_appsess);
     
-    if (have_appsession) {
-        pool_destroy(apools.serverid);
-        pool_destroy(apools.sessid);
-    }
 } /* end deinit() */
 
 /* sends the signal <sig> to all pids found in <oldpids> */
@@ -7189,7 +5657,6 @@ int main(int argc, char **argv) {
     init(argc, argv);
 
     signal(SIGQUIT, dump);
-    signal(SIGUSR1, sig_soft_stop);
     signal(SIGHUP, sig_dump_state);
 #ifdef DEBUG_MEMORY
     signal(SIGINT, sig_int);
@@ -7238,10 +5705,6 @@ int main(int argc, char **argv) {
 	 * never stopped them. */
 	exit(1);
     }
-
-    /* prepare pause/play signals */
-    signal(SIGTTOU, sig_pause);
-    signal(SIGTTIN, sig_listen);
 
     if (global.mode & MODE_DAEMON) {
 	global.mode &= ~MODE_VERBOSE;
@@ -7412,154 +5875,11 @@ int main(int argc, char **argv) {
     }
 
 
-    /* Free all Hash Keys and all Hash elements */
-    appsession_cleanup();
     /* Do some cleanup */ 
     deinit();
     
     exit(0);
 }
-
-#if defined(DEBUG_HASH)
-static void print_table(const CHTbl *htbl) {
-
-    ListElmt           *element;
-    int                i;
-    appsess *asession;
-
-    /*****************************************************************************
-     *                                                                            *
-     *  Display the chained hash table.                                           *
-     *                                                                            *
-     *****************************************************************************/
-    
-    fprintf(stdout, "Table size is %d\n", chtbl_size(htbl));
-    
-    for (i = 0; i < TBLSIZ; i++) {
-	fprintf(stdout, "Bucket[%03d]\n", i);
-	
-	for (element = list_head(&htbl->table[i]); element != NULL; element = list_next(element)) {
-	    //fprintf(stdout, "%c", *(char *)list_data(element));
-	    asession = (appsess *)list_data(element);
-	    fprintf(stdout, "ELEM :%s:", asession->sessid);
-	    fprintf(stdout, " Server :%s: \n", asession->serverid);
-	    //fprintf(stdout, " Server request_count :%li:\n",asession->request_count);
-	}
-	
-	fprintf(stdout, "\n");
-    }
-    return;
-} /* end print_table */
-#endif
-
-static int appsession_init(void)
-{
-    static int          initialized = 0;
-    int                 idlen;
-    struct server       *s;
-    struct proxy        *p = proxy;
-    
-    if (!initialized) {
-	if (!appsession_task_init()) {
-	    apools.sessid = NULL;
-	    apools.serverid = NULL;
-	    apools.ser_waste = 0;
-	    apools.ser_use = 0;
-	    apools.ser_msize = sizeof(void *);
-	    apools.ses_waste = 0;
-	    apools.ses_use = 0;
-	    apools.ses_msize = sizeof(void *);
-	    while (p) {
-		s = p->srv;
-		if (apools.ses_msize < p->appsession_len)
-		    apools.ses_msize = p->appsession_len;
-		while (s) {
-		    idlen = strlen(s->id);
-		    if (apools.ser_msize < idlen)
-			apools.ser_msize = idlen;
-		    s = s->next;
-		}
-		p = p->next;
-	    }
-	    apools.ser_msize ++; /* we use strings, so reserve space for '\0' */
-	    apools.ses_msize ++;
-	}
-	else {
-	    fprintf(stderr, "appsession_task_init failed\n");
-	    return -1;
-	}
-	initialized ++;
-    }
-    return 0;
-}
-
-static int appsession_task_init(void)
-{
-    static int initialized = 0;
-    struct task *t;
-    if (!initialized) {
-	if ((t = pool_alloc(task)) == NULL)
-	    return -1;
-	t->next = t->prev = t->rqnext = NULL;
-	t->wq = LIST_HEAD(wait_queue[0]);
-	t->state = TASK_IDLE;
-	t->context = NULL;
-	tv_delayfrom(&t->expire, &now, TBLCHKINT);
-	task_queue(t);
-	t->process = appsession_refresh;
-	initialized ++;
-    }
-    return 0;
-}
-
-static int appsession_refresh(struct task *t) {
-    struct proxy       *p = proxy;
-    CHTbl              *htbl;
-    ListElmt           *element, *last;
-    int                i;
-    appsess            *asession;
-    void               *data;
-
-    while (p) {
-        if (p->appsession_name != NULL) {
-            htbl = &p->htbl_proxy;
-            /* if we ever give up the use of TBLSIZ, we need to change this */
-            for (i = 0; i < TBLSIZ; i++) {
-	        last = NULL;
-                for (element = list_head(&htbl->table[i]); element != NULL; element = list_next(element)) {
-                    asession = (appsess *)list_data(element);
-                    if (tv_cmp2_ms(&asession->expire, &now) <= 0) {
-                        if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
-                            int len;
-			    /*
-			      on Linux NULL pointers are catched by sprintf, on solaris -> segfault 
-			    */
-                            len = sprintf(trash, "appsession_refresh: cleaning up expired Session '%s' on Server %s\n", 
-			                  asession->sessid,  asession->serverid?asession->serverid:"(null)");
-                            write(1, trash, len);
-                        }
-			/* delete the expired element from within the hash table */
-                        if ((list_rem_next(&htbl->table[i], last, (void **)&data) == 0) 
-			    && (htbl->table[i].destroy != NULL)) {
-			    htbl->table[i].destroy(data);
-			}
-			if (last == NULL) {/* patient lost his head, get a new one */
-			    element = list_head(&htbl->table[i]);
-			    if (element == NULL) break; /* no heads left, go to next patient */
-			}
-			else
-			    element = last;
-                    }/* end if (tv_cmp2_ms(&asession->expire, &now) <= 0) */
-                    else
-			last = element;
-                }/* end  for (element = list_head(&htbl->table[i]); element != NULL; element = list_next(element)) */
-            }
-	}
-        p = p->next;
-    }
-    tv_delayfrom(&t->expire, &now, TBLCHKINT); /* check expiration every 5 seconds */
-    return TBLCHKINT;
-} /* end appsession_refresh */
 
 
 /*
