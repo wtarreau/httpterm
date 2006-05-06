@@ -288,34 +288,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define PR_O_TCP_CLI_KA	0x00040000	/* enable TCP keep-alive on client-side sessions */
 #define PR_O_FORCE_CLO	0x00200000	/* enforce the connection close immediately after server response */
 
-/* various session flags, bits values 0x01 to 0x20 (shift 0) */
-
-/* session termination conditions, bits values 0x100 to 0x700 (0-7 shift 8) */
-#define SN_ERR_NONE     0x00000000
-#define SN_ERR_CLITO	0x00000100	/* client time-out */
-#define SN_ERR_CLICL	0x00000200	/* client closed (read/write error) */
-#define SN_ERR_SRVTO	0x00000300	/* server time-out, connect time-out */
-#define SN_ERR_SRVCL	0x00000400	/* server closed (connect/read/write error) */
-#define SN_ERR_PRXCOND	0x00000500	/* the proxy decided to close (deny...) */
-#define SN_ERR_RESOURCE	0x00000600	/* the proxy encountered a lack of a local resources (fd, mem, ...) */
-#define SN_ERR_INTERNAL	0x00000700	/* the proxy encountered an internal error */
-#define SN_ERR_MASK	0x00000700	/* mask to get only session error flags */
-#define SN_ERR_SHIFT	8		/* bit shift */
-
-/* session state at termination, bits values 0x1000 to 0x7000 (0-7 shift 12) */
-#define SN_FINST_R	0x00001000	/* session ended during client request */
-#define SN_FINST_C	0x00002000	/* session ended during server connect */
-#define SN_FINST_H	0x00003000	/* session ended during server headers */
-#define SN_FINST_D	0x00004000	/* session ended during data phase */
-#define SN_FINST_L	0x00005000	/* session ended while pushing last data to client */
-#define SN_FINST_MASK	0x00007000	/* mask to get only final session state flags */
-#define	SN_FINST_SHIFT	12		/* bit shift */
-
-/* various other session flags, bits values 0x400000 and above */
-#define SN_ASSIGNED	0x00800000	/* no need to assign a server to this session */
-#define SN_ADDR_SET	0x01000000	/* this session's server address has been set */
-
-
 /* different possible states for the client side */
 #define CL_STHEADERS	0
 #define CL_STDATA	1
@@ -411,7 +383,6 @@ struct session {
     int cli_state;			/* state of the client side */
     int srv_state;			/* state of the server side */
     int conn_retries;			/* number of connect retries left */
-    int flags;				/* some flags describing the session */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
     unsigned long to_write;		/* #of response data bytes to write after headers */
@@ -1733,8 +1704,6 @@ int event_accept(int fd) {
 	    return 0;
 	}
 
-	s->flags = 0;
-
 	if ((t = pool_alloc(task)) == NULL) { /* disable this proxy for a while */
 	    Alert("out of memory in event_accept().\n");
 	    FD_CLR(fd, StaticReadEvent);
@@ -2084,10 +2053,6 @@ int process_cli(struct session *t) {
 	 */
 	if (req->l >= req->rlim - req->data) {
 	    client_retnclose(t, t->proxy->errmsg.len400, t->proxy->errmsg.msg400);
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_PRXCOND;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_R;
 	    return 1;
 	}
 	else if (t->res_cr == RES_ERROR || t->res_cr == RES_NULL) {
@@ -2095,10 +2060,6 @@ int process_cli(struct session *t) {
 	    tv_eternity(&t->crexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLICL;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_R;
 	    return 1;
 	}
 	else if (tv_cmp2_ms(&t->crexpire, &now) <= 0) {
@@ -2106,10 +2067,6 @@ int process_cli(struct session *t) {
 	    /* read timeout : give up with an error message.
 	     */
 	    client_retnclose(t, t->proxy->errmsg.len408, t->proxy->errmsg.msg408);
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLITO;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_R;
 	    return 1;
 	}
 
@@ -2128,10 +2085,6 @@ int process_cli(struct session *t) {
 	    tv_eternity(&t->cwexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLICL;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}
 	/* last read, or end of server write */
@@ -2140,32 +2093,14 @@ int process_cli(struct session *t) {
 	    tv_eternity(&t->crexpire);
 	    shutdown(t->cli_fd, SHUT_RD);
 	    t->cli_state = CL_STSHUTR;
-	    return 1;
+	    goto cl_stshutr;
 	}	
-	/* last server read and buffer empty */
-	else if ((s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
-	    FD_CLR(t->cli_fd, StaticWriteEvent);
-	    tv_eternity(&t->cwexpire);
-	    shutdown(t->cli_fd, SHUT_WR);
-	    /* We must ensure that the read part is still alive when switching
-	     * to shutw */
-	    FD_SET(t->cli_fd, StaticReadEvent);
-	    if (t->proxy->clitimeout)
-		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
-	    t->cli_state = CL_STSHUTW;
-	    //fprintf(stderr,"%p:%s(%d), c=%d, s=%d\n", t, __FUNCTION__, __LINE__, t->cli_state, t->cli_state);
-	    return 1;
-	}
 	/* read timeout */
 	else if (tv_cmp2_ms(&t->crexpire, &now) <= 0) {
 	    FD_CLR(t->cli_fd, StaticReadEvent);
 	    tv_eternity(&t->crexpire);
 	    shutdown(t->cli_fd, SHUT_RD);
 	    t->cli_state = CL_STSHUTR;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLITO;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}	
 	/* write timeout */
@@ -2180,10 +2115,6 @@ int process_cli(struct session *t) {
 		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
 
 	    t->cli_state = CL_STSHUTW;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLITO;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}
 
@@ -2234,14 +2165,11 @@ int process_cli(struct session *t) {
 	return 0; /* other cases change nothing */
     }
     else if (c == CL_STSHUTR) {
+    cl_stshutr:
 	if (t->res_cw == RES_ERROR) {
 	    tv_eternity(&t->cwexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLICL;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}
 	else if ((s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
@@ -2254,10 +2182,6 @@ int process_cli(struct session *t) {
 	    tv_eternity(&t->cwexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLITO;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}
 	else if ((rep->l == 0 && t->to_write == 0)) {
@@ -2286,10 +2210,6 @@ int process_cli(struct session *t) {
 	    tv_eternity(&t->crexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLICL;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}
 	else if (t->res_cr == RES_NULL || s == SV_STCLOSE) {
@@ -2302,10 +2222,6 @@ int process_cli(struct session *t) {
 	    tv_eternity(&t->crexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLITO;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_D;
 	    return 1;
 	}
 	else if (req->l >= req->rlim - req->data) {
@@ -2350,7 +2266,7 @@ int process_cli(struct session *t) {
  * indicators accordingly. Note that if <status> is 0, no message is
  * returned.
  */
-static inline void srv_return_page(struct session *t, int err, int finst) {
+static inline void srv_return_page(struct session *t) {
     int hlen;
     struct server *srv;
 
@@ -2375,10 +2291,6 @@ static inline void srv_return_page(struct session *t, int err, int finst) {
     t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
     t->rep->r += hlen;
     t->req->l = 0;
-    if (!(t->flags & SN_ERR_MASK))
-	t->flags |= err;
-    if (!(t->flags & SN_FINST_MASK))
-	t->flags |= finst;
 }
 
 
@@ -2401,27 +2313,18 @@ int process_srv(struct session *t) {
 		 (c == CL_STSHUTR && t->req->l == 0)) { /* give up */
 	    tv_eternity(&t->cnexpire);
 	    t->srv_state = SV_STCLOSE;
-	    if (!(t->flags & SN_ERR_MASK))
-		t->flags |= SN_ERR_CLICL;
-	    if (!(t->flags & SN_FINST_MASK))
-		t->flags |= SN_FINST_C;
 	    return 1;
 	}
 	else {
-	    if (!(t->flags & SN_ASSIGNED)) {
-		t->srv = get_server_rr(t->proxy);
-		t->flags |= SN_ASSIGNED;
-	    }
-
+	    t->srv = get_server_rr(t->proxy);
 	    if (t->srv->resp_time == 0)
 		goto immediate_response;
 
-	    t->flags |= SN_ADDR_SET;
 	    t->srv->cur_sess++;
 
 	    tv_delayfrom(&t->cnexpire, &now, t->srv->resp_time);
 	    t->srv_state = SV_STCONN;
-	    return 1;
+	    return 0; /* does not change anything for the client side */
 	}
     }
     else if (s == SV_STCONN) { /* connection in progress */
@@ -2434,7 +2337,7 @@ int process_srv(struct session *t) {
 	immediate_response:
 	    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
 	    tv_eternity(&t->cnexpire);
-	    srv_return_page(t, SN_ERR_SRVTO, SN_FINST_C);
+	    srv_return_page(t);
 	    return 1;
 	}
     }
@@ -2458,16 +2361,19 @@ int process_srv(struct session *t) {
  */
 int process_session(struct task *t) {
     struct session *s = t->context;
-    int fsm_resync = 0;
+    int fsm_resync_cli = 1;
+    int fsm_resync_srv = 1;
 
     do {
-	fsm_resync = 0;
-	//fprintf(stderr,"before_cli:cli=%d, srv=%d\n", s->cli_state, s->srv_state);
-	fsm_resync |= process_cli(s);
-	//fprintf(stderr,"cli/srv:cli=%d, srv=%d\n", s->cli_state, s->srv_state);
-	fsm_resync |= process_srv(s);
-	//fprintf(stderr,"after_srv:cli=%d, srv=%d\n", s->cli_state, s->srv_state);
-    } while (fsm_resync);
+	if (fsm_resync_cli) {
+	    fsm_resync_srv |= process_cli(s);
+	    fsm_resync_cli = 0;
+	}
+	if (fsm_resync_srv) {
+	    fsm_resync_cli |= process_srv(s);
+	    fsm_resync_srv = 0;
+	}
+    } while (fsm_resync_cli || fsm_resync_srv);
 
     if (s->cli_state != CL_STCLOSE || s->srv_state != SV_STCLOSE) {
 	struct timeval min1;
