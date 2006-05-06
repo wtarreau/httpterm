@@ -55,7 +55,6 @@
 #include <stdarg.h>
 #include <sys/resource.h>
 #include <time.h>
-#include <syslog.h>
 
 #ifdef USE_PCRE
 #include <pcre.h>
@@ -324,10 +323,8 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define	PR_O_KEEPALIVE	0x00000080	/* follow keep-alive sessions */
 #define	PR_O_FWDFOR	0x00000100	/* insert x-forwarded-for with client address */
 #define	PR_O_BIND_SRC	0x00000200	/* bind to a specific source address when connect()ing */
-#define PR_O_NULLNOLOG	0x00000400	/* a connect without request will not be logged */
 #define PR_O_HTTP_CHK	0x00002000	/* use HTTP 'OPTIONS' method to check server health */
 #define PR_O_PERSIST	0x00004000	/* server persistence stays effective even when server is down */
-#define PR_O_LOGASAP	0x00008000	/* log as soon as possible, without waiting for the session to complete */
 #define PR_O_HTTP_CLOSE	0x00010000	/* force 'connection: close' in both directions */
 #define PR_O_CHK_CACHE	0x00020000	/* require examination of cacheability of the 'set-cookie' field */
 #define PR_O_TCP_CLI_KA	0x00040000	/* enable TCP keep-alive on client-side sessions */
@@ -411,8 +408,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 
 /* modes of operation (global.mode) */
 #define	MODE_DEBUG	1
-#define	MODE_STATS	2
-#define	MODE_LOG	4
 #define	MODE_DAEMON	8
 #define	MODE_QUIET	16
 #define	MODE_CHECK	32
@@ -446,16 +441,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define CFG_GLOBAL	1
 #define CFG_LISTEN	2
 
-/* fields that need to be logged. They appear as flags in session->logs.logwait */
-#define LW_DATE		1	/* date */
-#define LW_CLIP		2	/* CLient IP */
-#define LW_SVIP		4	/* SerVer IP */
-#define LW_SVID		8	/* server ID */
-#define	LW_REQ		16	/* http REQuest */
-#define LW_RESP		32	/* http RESPonse */
-#define LW_PXIP		64	/* proxy IP */
-#define LW_PXID		128	/* proxy ID */
-
 #define ERR_NONE	0	/* no error */
 #define ERR_RETRYABLE	1	/* retryable error, may be cumulated */
 #define ERR_FATAL	2	/* fatal error, may be cumulated */
@@ -486,7 +471,6 @@ struct server {
     int state;				/* server state (SRV_*) */
     char *id;				/* just for identification */
     struct sockaddr_in addr;		/* the address to connect to */
-    struct sockaddr_in source_addr;	/* the address to which we want to bind for connect() */
     short check_port;			/* the port to use for the health checks */
     int health;				/* 0->rise-1 = bad; rise->rise+fall-1 = good */
     int rise, fall;			/* time in iterations */
@@ -538,7 +522,6 @@ struct session {
     struct sockaddr_in srv_addr;	/* the address to connect to */
     struct server *srv;			/* the server being used */
     struct {
-	int logwait;			/* log fields waiting to be collected : LW_* */
 	struct timeval tv_accept;	/* date of the accept() (beginning of the session) */
 	long  t_request;		/* delay before the end of the request arrives, -1 if never occurs */
 	long  t_queue;			/* delay before the session gets out of the connect queue, -1 if never occurs */
@@ -571,12 +554,7 @@ struct proxy {
     int conn_retries;			/* maximum number of connect retries */
     int options;			/* PR_O_REDISP, PR_O_TRANSP, ... */
     int mode;				/* mode = PR_MODE_TCP, PR_MODE_HTTP or PR_MODE_HEALTH */
-    struct sockaddr_in source_addr;	/* the address to which we want to bind for connect() */
     struct proxy *next;
-    struct sockaddr_in logsrv1, logsrv2; /* 2 syslog servers */
-    signed char logfac1, logfac2;	/* log facility for both servers. -1 = disabled */
-    int loglev1, loglev2;		/* log level for each server, 7 by default */
-    int to_log;				/* things to be logged (LW_*) */
     struct timeval stop_time;		/* date to stop listening, when stopping != 0 */
     int nb_reqadd, nb_rspadd;
     struct hdr_exp *req_exp;		/* regular expressions for request headers */
@@ -631,16 +609,7 @@ static struct {
     int mode;
     char *chroot;
     char *pidfile;
-    int logfac1, logfac2;
-    int loglev1, loglev2;
-    struct sockaddr_in logsrv1, logsrv2;
-} global = {
-    logfac1 : -1,
-    logfac2 : -1,
-    loglev1 : 7, /* max syslog level : debug */
-    loglev2 : 7,
-    /* others NULL OK */
-};
+} global;
 
 /*********************************************************************/
 
@@ -701,33 +670,6 @@ static char common_response[RESPSIZE];
 
 const int zero = 0;
 const int one = 1;
-
-/*
- * Syslog facilities and levels. Conforming to RFC3164.
- */
-
-#define MAX_SYSLOG_LEN		1024
-#define NB_LOG_FACILITIES	24
-const char *log_facilities[NB_LOG_FACILITIES] = {
-    "kern", "user", "mail", "daemon",
-    "auth", "syslog", "lpr", "news",
-    "uucp", "cron", "auth2", "ftp",
-    "ntp", "audit", "alert", "cron2",
-    "local0", "local1", "local2", "local3",
-    "local4", "local5", "local6", "local7"
-};
-
-
-#define NB_LOG_LEVELS	8
-const char *log_levels[NB_LOG_LEVELS] = {
-    "emerg", "alert", "crit", "err",
-    "warning", "notice", "info", "debug"
-};
-
-#define SYSLOG_PORT	514
-
-const char *monthname[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-			     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
 #define MAX_HOSTNAME_LEN	32
 static char hostname[MAX_HOSTNAME_LEN] = "";
@@ -1122,175 +1064,6 @@ struct listener *str2listener(char *str, struct listener *tail) {
     free(dupstr);
     return NULL;
 }
-
-
-#define FD_SETS_ARE_BITFIELDS
-#ifdef FD_SETS_ARE_BITFIELDS
-/*
- * This map is used with all the FD_* macros to check whether a particular bit
- * is set or not. Each bit represents an ACSII code. FD_SET() sets those bytes
- * which should be encoded. When FD_ISSET() returns non-zero, it means that the
- * byte should be encoded. Be careful to always pass bytes from 0 to 255
- * exclusively to the macros.
- */
-fd_set hdr_encode_map[(sizeof(fd_set) > (256/8)) ? 1 : ((256/8) / sizeof(fd_set))];
-fd_set url_encode_map[(sizeof(fd_set) > (256/8)) ? 1 : ((256/8) / sizeof(fd_set))];
-
-#else
-#error "Check if your OS uses bitfields for fd_sets"
-#endif
-
-/* will try to encode the string <string> replacing all characters tagged in
- * <map> with the hexadecimal representation of their ASCII-code (2 digits)
- * prefixed by <escape>, and will store the result between <start> (included
- *) and <stop> (excluded), and will always terminate the string with a '\0'
- * before <stop>. The position of the '\0' is returned if the conversion
- * completes. If bytes are missing between <start> and <stop>, then the
- * conversion will be incomplete and truncated. If <stop> <= <start>, the '\0'
- * cannot even be stored so we return <start> without writing the 0.
- * The input string must also be zero-terminated.
- */
-char hextab[16] = "0123456789ABCDEF";
-char *encode_string(char *start, char *stop,
-		    const char escape, const fd_set *map,
-		    const char *string)
-{
-    if (start < stop) {
-	stop--; /* reserve one byte for the final '\0' */
-	while (start < stop && *string != 0) {
-	    if (!FD_ISSET((unsigned char)(*string), map))
-		*start++ = *string;
-	    else {
-		if (start + 3 >= stop)
-		    break;
-		*start++ = escape;
-		*start++ = hextab[(*string >> 4) & 15];
-		*start++ = hextab[*string & 15];
-	    }
-	    string++;
-	}
-	*start = '\0';
-    }
-    return start;
-}
-
-/*
- * This function sends a syslog message to both log servers of a proxy,
- * or to global log servers if the proxy is NULL.
- * It also tries not to waste too much time computing the message header.
- * It doesn't care about errors nor does it report them.
- */
-void send_log(struct proxy *p, int level, char *message, ...) {
-    static int logfd = -1;	/* syslog UDP socket */
-    static long tvsec = -1;	/* to force the string to be initialized */
-    struct timeval tv;
-    va_list argp;
-    static char logmsg[MAX_SYSLOG_LEN];
-    static char *dataptr = NULL;
-    int fac_level;
-    int hdr_len, data_len;
-    struct sockaddr_in *sa[2];
-    int facilities[2], loglevel[2];
-    int nbloggers = 0;
-    char *log_ptr;
-
-    if (logfd < 0) {
-	if ((logfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
-	    return;
-    }
-    
-    if (level < 0 || progname == NULL || message == NULL)
-	return;
-
-    gettimeofday(&tv, NULL);
-    if (tv.tv_sec != tvsec || dataptr == NULL) {
-	/* this string is rebuild only once a second */
-	struct tm *tm = localtime(&tv.tv_sec);
-	tvsec = tv.tv_sec;
-
-	hdr_len = snprintf(logmsg, sizeof(logmsg),
-			   "<<<<>%s %2d %02d:%02d:%02d %s[%d]: ",
-			   monthname[tm->tm_mon],
-			   tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec,
-			   progname, pid);
-	/* WARNING: depending upon implementations, snprintf may return
-	 * either -1 or the number of bytes that would be needed to store
-	 * the total message. In both cases, we must adjust it.
-	 */
-	if (hdr_len < 0 || hdr_len > sizeof(logmsg))
-	    hdr_len = sizeof(logmsg);
-
-	dataptr = logmsg + hdr_len;
-    }
-
-    va_start(argp, message);
-    data_len = vsnprintf(dataptr, logmsg + sizeof(logmsg) - dataptr, message, argp);
-    if (data_len < 0 || data_len > (logmsg + sizeof(logmsg) - dataptr))
-	data_len = logmsg + sizeof(logmsg) - dataptr;
-    va_end(argp);
-    dataptr[data_len - 1] = '\n'; /* force a break on ultra-long lines */
-
-    if (p == NULL) {
-	if (global.logfac1 >= 0) {
-	    sa[nbloggers] = &global.logsrv1;
-	    facilities[nbloggers] = global.logfac1;
-	    loglevel[nbloggers] = global.loglev1;
-	    nbloggers++;
-	}
-	if (global.logfac2 >= 0) {
-	    sa[nbloggers] = &global.logsrv2;
-	    facilities[nbloggers] = global.logfac2;
-	    loglevel[nbloggers] = global.loglev2;
-	    nbloggers++;
-	}
-    } else {
-	if (p->logfac1 >= 0) {
-	    sa[nbloggers] = &p->logsrv1;
-	    facilities[nbloggers] = p->logfac1;
-	    loglevel[nbloggers] = p->loglev1;
-	    nbloggers++;
-	}
-	if (p->logfac2 >= 0) {
-	    sa[nbloggers] = &p->logsrv2;
-	    facilities[nbloggers] = p->logfac2;
-	    loglevel[nbloggers] = p->loglev2;
-	    nbloggers++;
-	}
-    }
-
-    while (nbloggers-- > 0) {
-	/* we can filter the level of the messages that are sent to each logger */
-	if (level > loglevel[nbloggers])
-	    continue;
-	
-	/* For each target, we may have a different facility.
-	 * We can also have a different log level for each message.
-	 * This induces variations in the message header length.
-	 * Since we don't want to recompute it each time, nor copy it every
-	 * time, we only change the facility in the pre-computed header,
-	 * and we change the pointer to the header accordingly.
-	 */
-	fac_level = (facilities[nbloggers] << 3) + level;
-	log_ptr = logmsg + 3; /* last digit of the log level */
-	do {
-	    *log_ptr = '0' + fac_level % 10;
-	    fac_level /= 10;
-	    log_ptr--;
-	} while (fac_level && log_ptr > logmsg);
-	*log_ptr = '<';
-	
-	/* the total syslog message now starts at logptr, for dataptr+data_len-logptr */
-
-#ifndef MSG_NOSIGNAL
-	sendto(logfd, log_ptr, dataptr + data_len - log_ptr, MSG_DONTWAIT,
-	       (struct sockaddr *)sa[nbloggers], sizeof(**sa));
-#else
-	sendto(logfd, log_ptr, dataptr + data_len - log_ptr, MSG_DONTWAIT | MSG_NOSIGNAL,
-	       (struct sockaddr *)sa[nbloggers], sizeof(**sa));
-#endif
-    }
-}
-
 
 /* sets <tv> to the current time */
 static inline struct timeval *tv_now(struct timeval *tv) {
@@ -2223,20 +1996,11 @@ int event_accept(int fd) {
 	    case ECONNABORTED:
 		return 0;	    /* nothing more to accept */
 	    case ENFILE:
-		send_log(p, LOG_EMERG,
-			 "Proxy %s reached system FD limit at %d. Please check system tunables.\n",
-			 p->id, maxfd);
 		return 0;
 	    case EMFILE:
-		send_log(p, LOG_EMERG,
-			 "Proxy %s reached process FD limit at %d. Please check 'ulimit-n' and restart.\n",
-			 p->id, maxfd);
 		return 0;
 	    case ENOBUFS:
 	    case ENOMEM:
-		send_log(p, LOG_EMERG,
-			 "Proxy %s reached system memory limit at %d sockets. Please check system tunables.\n",
-			 p->id, maxfd);
 		return 0;
 	    default:
 		return 0;
@@ -2315,28 +2079,12 @@ int event_accept(int fd) {
 	s->srv = NULL;
 	s->conn_retries = p->conn_retries;
 
-	if (s->flags & SN_MONITOR)
-	    s->logs.logwait = 0;
-	else
-	    s->logs.logwait = p->to_log;
-
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
 	s->logs.t_queue = -1;
 
 	s->uniq_id = totalconn;
 	p->cum_conn++;
-
-	if ((p->mode == PR_MODE_TCP || p->mode == PR_MODE_HTTP)
-	    && (p->logfac1 >= 0 || p->logfac2 >= 0)) {
-	    struct sockaddr_storage sockname;
-	    socklen_t namelen = sizeof(sockname);
-
-	    if (addr.ss_family != AF_INET ||
-		!(s->proxy->options & PR_O_TRANSP) ||
-		get_original_dst(cfd, (struct sockaddr_in *)&sockname, &namelen) == -1)
-		getsockname(cfd, (struct sockaddr *)&sockname, &namelen);
-	}
 
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	    struct sockaddr_in sockname;
@@ -3746,47 +3494,6 @@ int select_loop(int action) {
   return 1;
 }
 
-
-#if STATTIME > 0
-/*
- * Display proxy statistics regularly. It is designed to be called from the
- * select_loop().
- */
-int stats(void) {
-    static int lines;
-    static struct timeval nextevt;
-    static struct timeval lastevt;
-    static struct timeval starttime = {0,0};
-    unsigned long totaltime, deltatime;
-    int ret;
-
-    if (tv_cmp(&now, &nextevt) > 0) {
-	deltatime = (tv_diff(&lastevt, &now)?:1);
-	totaltime = (tv_diff(&starttime, &now)?:1);
-	
-	if (global.mode & MODE_STATS) {	
-		if ((lines++ % 16 == 0) && !(global.mode & MODE_LOG))
-		    qfprintf(stderr,
-			    "\n active   total  tsknew tskgood tskleft tskrght tsknsch tsklsch tskrsch\n");
-		if (lines>1) {
-			qfprintf(stderr,"%07d %07d %07d %07d %07d %07d %07d %07d %07d\n",
-				actconn, totalconn,
-				stats_tsk_new, stats_tsk_good,
-				stats_tsk_left, stats_tsk_right,
-				stats_tsk_nsrch, stats_tsk_lsrch, stats_tsk_rsrch);
-		}
-	}
-	    
-	tv_delayfrom(&nextevt, &now, STATTIME);
-
-	lastevt=now;
-    }	
-    ret = tv_remain(&now, &nextevt);
-    return ret;
-}
-#endif
-
-
 /*
  * this function dumps every server's state when the process receives SIGHUP.
  */
@@ -3797,7 +3504,6 @@ void sig_dump_state(int sig) {
     while (p) {
 	struct server *s = p->srv;
 
-	send_log(p, LOG_NOTICE, "SIGHUP received, dumping servers states for proxy %s.\n", p->id);
 	while (s) {
 	    snprintf(trash, sizeof(trash),
 		     "SIGHUP: Server %s/%s is %s. Conn: %d act, %d pend, %d tot.",
@@ -3805,7 +3511,6 @@ void sig_dump_state(int sig) {
 		     (s->state & SRV_RUNNING) ? "UP" : "DOWN",
 		     s->cur_sess, 0, s->cum_sess);
 	    Warning("%s\n", trash);
-	    send_log(p, LOG_NOTICE, "%s\n", trash);
 	    s = s->next;
 	}
 
@@ -3823,7 +3528,6 @@ void sig_dump_state(int sig) {
 		     p->nbconn, 0, 0, p->cum_conn);
 	}
 	Warning("%s\n", trash);
-	send_log(p, LOG_NOTICE, "%s\n", trash);
 
 	p = p->next;
     }
@@ -3937,9 +3641,6 @@ int cfg_parse_global(char *file, int linenum, char **args) {
     else if (!strcmp(args[0], "quiet")) {
 	global.mode |= MODE_QUIET;
     }
-    else if (!strcmp(args[0], "stats")) {
-	global.mode |= MODE_STATS;
-    }
     else if (!strcmp(args[0], "uid")) {
 	if (global.uid != 0) {
 	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
@@ -4023,54 +3724,6 @@ int cfg_parse_global(char *file, int linenum, char **args) {
 	}
 	global.pidfile = strdup(args[1]);
     }
-    else if (!strcmp(args[0], "log")) {  /* syslog server address */
-	struct sockaddr_in *sa;
-	int facility, level;
-	
-	if (*(args[1]) == 0 || *(args[2]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <address> and <facility> as arguments.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	for (facility = 0; facility < NB_LOG_FACILITIES; facility++)
-	    if (!strcmp(log_facilities[facility], args[2]))
-		break;
-	
-	if (facility >= NB_LOG_FACILITIES) {
-	    Alert("parsing [%s:%d] : unknown log facility '%s'\n", file, linenum, args[2]);
-	    exit(1);
-	}
-
-	level = 7; /* max syslog level = debug */
-	if (*(args[3])) {
-	    while (level >= 0 && strcmp(log_levels[level], args[3]))
-		level--;
-	    if (level < 0) {
-		Alert("parsing [%s:%d] : unknown optional log level '%s'\n", file, linenum, args[3]);
-		exit(1);
-	    }
-	}
-
-	sa = str2sa(args[1]);
-	if (!sa->sin_port)
-	    sa->sin_port = htons(SYSLOG_PORT);
-
-	if (global.logfac1 == -1) {
-	    global.logsrv1 = *sa;
-	    global.logfac1 = facility;
-	    global.loglev1 = level;
-	}
-	else if (global.logfac2 == -1) {
-	    global.logsrv2 = *sa;
-	    global.logfac2 = facility;
-	    global.loglev2 = level;
-	}
-	else {
-	    Alert("parsing [%s:%d] : too many syslog servers\n", file, linenum);
-	    return -1;
-	}
-	
-    }
     else {
 	Alert("parsing [%s:%d] : unknown keyword '%s' in '%s' section\n", file, linenum, args[0], "global");
 	return -1;
@@ -4086,7 +3739,6 @@ void init_default_instance() {
     defproxy.state = PR_STNEW;
     defproxy.maxconn = global.maxconn;
     defproxy.conn_retries = CONN_RETRIES;
-    defproxy.logfac1 = defproxy.logfac2 = -1; /* log disabled */
 }
 
 /*
@@ -4163,15 +3815,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 
 	curproxy->clitimeout = defproxy.clitimeout;
 	curproxy->mode = PR_MODE_HTTP;
-	curproxy->logfac1 = defproxy.logfac1;
-	curproxy->logsrv1 = defproxy.logsrv1;
-	curproxy->loglev1 = defproxy.loglev1;
-	curproxy->logfac2 = defproxy.logfac2;
-	curproxy->logsrv2 = defproxy.logsrv2;
-	curproxy->loglev2 = defproxy.loglev2;
-	curproxy->to_log = defproxy.to_log;
 	curproxy->grace  = defproxy.grace;
-	curproxy->source_addr = defproxy.source_addr;
 	curproxy->mon_net = defproxy.mon_net;
 	curproxy->mon_mask = defproxy.mon_mask;
 	return 0;
@@ -4256,9 +3900,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	else if (!strcmp(args[1], "forwardfor"))
 	    /* insert x-forwarded-for field */
 	    curproxy->options |= PR_O_FWDFOR;
-	else if (!strcmp(args[1], "logasap"))
-	    /* log as soon as possible, without waiting for the session to complete */
-	    curproxy->options |= PR_O_LOGASAP;
 	else if (!strcmp(args[1], "httpclose"))
 	    /* force connection: close in both directions in HTTP mode */
 	    curproxy->options |= PR_O_HTTP_CLOSE;
@@ -4268,16 +3909,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	else if (!strcmp(args[1], "checkcache"))
 	    /* require examination of cacheability of the 'set-cookie' field */
 	    curproxy->options |= PR_O_CHK_CACHE;
-	else if (!strcmp(args[1], "httplog"))
-	    /* generate a complete HTTP log */
-	    curproxy->to_log |= LW_DATE | LW_CLIP | LW_SVID | LW_REQ | LW_PXID | LW_RESP;
-	else if (!strcmp(args[1], "tcplog"))
-	    /* generate a detailed TCP log */
-	    curproxy->to_log |= LW_DATE | LW_CLIP | LW_SVID | LW_PXID;
-	else if (!strcmp(args[1], "dontlognull")) {
-	    /* don't log empty requests */
-	    curproxy->options |= PR_O_NULLNOLOG;
-	}
 	else if (!strcmp(args[1], "tcpka")) {
 	    /* enable TCP keep-alives on client and server sessions */
 	    curproxy->options |= PR_O_TCP_CLI_KA | PR_O_TCP_SRV_KA;
@@ -4422,75 +4053,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 		return -1;
 	    }
 	}
-    }
-    else if (!strcmp(args[0], "log")) {  /* syslog server address */
-	struct sockaddr_in *sa;
-	int facility;
-	
-	if (*(args[1]) && *(args[2]) == 0 && !strcmp(args[1], "global")) {
-	    curproxy->logfac1 = global.logfac1;
-	    curproxy->logsrv1 = global.logsrv1;
-	    curproxy->loglev1 = global.loglev1;
-	    curproxy->logfac2 = global.logfac2;
-	    curproxy->logsrv2 = global.logsrv2;
-	    curproxy->loglev2 = global.loglev2;
-	}
-	else if (*(args[1]) && *(args[2])) {
-	    int level;
-
-	    for (facility = 0; facility < NB_LOG_FACILITIES; facility++)
-		if (!strcmp(log_facilities[facility], args[2]))
-		    break;
-	
-	    if (facility >= NB_LOG_FACILITIES) {
-		Alert("parsing [%s:%d] : unknown log facility '%s'\n", file, linenum, args[2]);
-		exit(1);
-	    }
-	    
-	    level = 7; /* max syslog level = debug */
-	    if (*(args[3])) {
-		while (level >= 0 && strcmp(log_levels[level], args[3]))
-		     level--;
-		if (level < 0) {
-		    Alert("parsing [%s:%d] : unknown optional log level '%s'\n", file, linenum, args[3]);
-		    exit(1);
-		}
-	    }
-
-	    sa = str2sa(args[1]);
-	    if (!sa->sin_port)
-		sa->sin_port = htons(SYSLOG_PORT);
-	    
-	    if (curproxy->logfac1 == -1) {
-		curproxy->logsrv1 = *sa;
-		curproxy->logfac1 = facility;
-		curproxy->loglev1 = level;
-	    }
-	    else if (curproxy->logfac2 == -1) {
-		curproxy->logsrv2 = *sa;
-		curproxy->logfac2 = facility;
-		curproxy->loglev2 = level;
-	    }
-	    else {
-		Alert("parsing [%s:%d] : too many syslog servers\n", file, linenum);
-		return -1;
-	    }
-	}
-	else {
-	    Alert("parsing [%s:%d] : 'log' expects either <address[:port]> and <facility> or 'global' as arguments.\n",
-		  file, linenum);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "source")) {  /* address to which we bind when connecting */
-	if (!*args[1]) {
-	    Alert("parsing [%s:%d] : '%s' expects <addr>[:<port>] as argument.\n",
-		  file, linenum, "source");
-	    return -1;
-	}
-	
-	curproxy->source_addr = *str2sa(args[1]);
-	curproxy->options |= PR_O_BIND_SRC;
     }
     else if (!strcmp(args[0], "cliexp") || !strcmp(args[0], "reqrep")) {  /* replace request header from a regex */
 	regex_t *preg;
@@ -5287,34 +4849,6 @@ void init(int argc, char **argv) {
 	    common_response[i] = '0' + i % 10;
     }
 
-    /* initialize the log header encoding map : '{|}"#' should be encoded with
-     * '#' as prefix, as well as non-printable characters ( <32 or >= 127 ).
-     * URL encoding only requires '"', '#' to be encoded as well as non-
-     * printable characters above.
-     */
-    memset(hdr_encode_map, 0, sizeof(hdr_encode_map));
-    memset(url_encode_map, 0, sizeof(url_encode_map));
-    for (i = 0; i < 32; i++) {
-	FD_SET(i, hdr_encode_map);
-	FD_SET(i, url_encode_map);
-    }
-    for (i = 127; i < 256; i++) {
-	FD_SET(i, hdr_encode_map);
-	FD_SET(i, url_encode_map);
-    }
-
-    tmp = "\"#{|}";
-    while (*tmp) {
-	FD_SET(*tmp, hdr_encode_map);
-	tmp++;
-    }
-
-    tmp = "\"#";
-    while (*tmp) {
-	FD_SET(*tmp, url_encode_map);
-	tmp++;
-    }
-
     cfg_polling_mechanism = POLL_USE_SELECT;  /* select() is always available */
 #if defined(ENABLE_POLL)
     cfg_polling_mechanism |= POLL_USE_POLL;
@@ -5380,12 +4914,6 @@ void init(int argc, char **argv) {
 		    }
 		}
 	    }
-#if STATTIME > 0
-	    else if (*flag == 's')
-		arg_mode |= MODE_STATS;
-	    else if (*flag == 'l')
-		arg_mode |= MODE_LOG;
-#endif
 	    else { /* >=2 args */
 		argv++; argc--;
 		if (argc == 0)
@@ -5445,7 +4973,7 @@ void init(int argc, char **argv) {
 	global.mode &= ~(MODE_DAEMON | MODE_QUIET);
     }
     global.mode |= (arg_mode & (MODE_DAEMON | MODE_FOREGROUND | MODE_QUIET |
-				MODE_VERBOSE | MODE_DEBUG | MODE_STATS | MODE_LOG));
+				MODE_VERBOSE | MODE_DEBUG));
 
     if ((global.mode & MODE_DEBUG) && (global.mode & (MODE_DAEMON | MODE_QUIET))) {
 	Warning("<debug> mode incompatible with <quiet> and <daemon>. Keeping <debug> only.\n");
@@ -5568,7 +5096,6 @@ int start_proxies(int verbose) {
 
 	if (!pxerr) {
 	    curproxy->state = PR_STRUN;
-	    send_log(curproxy, LOG_NOTICE, "Proxy %s started.\n", curproxy->id);
 	}
     }
 
@@ -5720,7 +5247,7 @@ int main(int argc, char **argv) {
 	close(0); close(1); close(2);
     }
 
-    /* open log & pid files before the chroot */
+    /* open pid files before the chroot */
     if (global.mode & MODE_DAEMON && global.pidfile != NULL) {
 	int pidfd;
 	unlink(global.pidfile);
