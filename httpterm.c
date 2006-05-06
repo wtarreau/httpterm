@@ -2855,7 +2855,7 @@ int process_cli(struct session *t) {
  * indicators accordingly. Note that if <status> is 0, no message is
  * returned.
  */
-void srv_return_page(struct session *t, int err, int finst) {
+static inline void srv_return_page(struct session *t, int err, int finst) {
     int hlen;
     struct server *srv;
 
@@ -2866,11 +2866,14 @@ void srv_return_page(struct session *t, int err, int finst) {
 		   "HTTP/1.0 %03d\r\n"
 		   "Connection: close\r\n"
 		   "%s"
-		   "X-params: id=%s, code=%d, size=%d, time=%d, cache=%d\r\n"
+		   "X-req: size=%ld, time=%ld ms\r\n"
+		   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
 		   "\r\n",
 		   srv->resp_code,
 		   srv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
-		   srv->id, srv->resp_code, srv->resp_size, srv->resp_time, srv->resp_cache);
+		   (long)t->req->total, t->logs.t_request, 
+		   srv->id, srv->resp_code, srv->resp_cache, srv->resp_size, srv->resp_time,
+		   t->logs.t_queue - t->logs.t_request);
 
     t->to_write = srv->resp_size;
     t->rep->l = hlen;
@@ -2891,7 +2894,6 @@ void srv_return_page(struct session *t, int err, int finst) {
 int process_srv(struct session *t) {
     int s = t->srv_state;
     int c = t->cli_state;
-    int conn_err;
 
 #ifdef DEBUG_FULL
     fprintf(stderr,"process_srv: c=%s, s=%s\n", cli_stnames[c], srv_stnames[s]);
@@ -2911,7 +2913,6 @@ int process_srv(struct session *t) {
 	    return 1;
 	}
 	else {
-	    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
 	    assign_server(t);
 	    if (t->srv->resp_time == 0)
 		goto immediate_response;
@@ -2932,10 +2933,9 @@ int process_srv(struct session *t) {
 	    if (t->srv)
 		t->srv->cur_sess--;
 	immediate_response:
-	    conn_err = SN_ERR_SRVTO; // it was a connect timeout.
-
+	    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
 	    tv_eternity(&t->cnexpire);
-	    srv_return_page(t, conn_err, SN_FINST_C);
+	    srv_return_page(t, SN_ERR_SRVTO, SN_FINST_C);
 	    return 1;
 	}
     }
