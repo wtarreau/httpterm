@@ -63,10 +63,6 @@
 #include <regex.h>
 #endif
 
-#if defined(TPROXY) && defined(NETFILTER)
-#include <linux/netfilter_ipv4.h>
-#endif
-
 #if defined(__dietlibc__)
 #include <strings.h>
 #endif
@@ -161,11 +157,6 @@
 
 /* how many bits are needed to code the size of an int (eg: 32bits -> 5) */
 #define	INTBITS		5
-
-/* show stats this every millisecond, 0 to disable */
-#ifndef STATTIME
-#define STATTIME	2000
-#endif
 
 /* this reduces the number of calls to select() by choosing appropriate
  * sheduler precision in milliseconds. It should be near the minimum
@@ -306,9 +297,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define POLL_USE_EPOLL          (1<<2)
 
 /* bits for proxy->options */
-#define PR_O_REDISP	0x00000001	/* allow reconnection to dispatch in case of errors */
-#define PR_O_TRANSP	0x00000002	/* transparent mode : use original DEST as dispatch */
-#define	PR_O_KEEPALIVE	0x00000080	/* follow keep-alive sessions */
 #define PR_O_HTTP_CLOSE	0x00010000	/* force 'connection: close' in both directions */
 #define PR_O_CHK_CACHE	0x00020000	/* require examination of cacheability of the 'set-cookie' field */
 #define PR_O_TCP_CLI_KA	0x00040000	/* enable TCP keep-alive on client-side sessions */
@@ -467,7 +455,6 @@ struct session {
     struct buffer *rep;			/* response buffer */
     unsigned long to_write;		/* #of response data bytes to write after headers */
     struct sockaddr_storage cli_addr;	/* the client address */
-    struct sockaddr_in srv_addr;	/* the address to connect to */
     struct server *srv;			/* the server being used */
     struct {
 	struct timeval tv_accept;	/* date of the accept() (beginning of the session) */
@@ -498,7 +485,7 @@ struct proxy {
     unsigned int cum_conn;		/* cumulated number of processed sessions */
     int maxconn;			/* max # of active sessions */
     int conn_retries;			/* maximum number of connect retries */
-    int options;			/* PR_O_REDISP, PR_O_TRANSP, ... */
+    int options;			/* PR_O_* ... */
     struct proxy *next;
     struct timeval stop_time;		/* date to stop listening, when stopping != 0 */
     int nb_reqadd, nb_rspadd;
@@ -679,16 +666,6 @@ const char *HTTP_504 =
 	"\r\n"
 	"<html><body><h1>504 Gateway Time-out</h1>\nThe server didn't respond in time.\n</body></html>\n";
 
-/*********************************************************************/
-/*  statistics  ******************************************************/
-/*********************************************************************/
-
-#if STATTIME > 0
-static int stats_tsk_lsrch, stats_tsk_rsrch,
-    stats_tsk_good, stats_tsk_right, stats_tsk_left,
-    stats_tsk_new, stats_tsk_nsrch;
-#endif
-
 
 /*********************************************************************/
 /*  debugging  *******************************************************/
@@ -723,18 +700,11 @@ void usage(char *name) {
     display_version();
     fprintf(stderr,
 	    "Usage : %s -f <cfgfile> [ -vdV"
-#if STATTIME > 0
-	    "sl"
-#endif
 	    "D ] [ -n <maxconn> ] [ -N <maxpconn> ]\n"
 	    "        [ -p <pidfile> ] [ -m <max megs> ]\n"
 	    "        -v displays version\n"
 	    "        -d enters debug mode ; -db only disables background mode.\n"
 	    "        -V enters verbose mode (disables quiet mode)\n"
-#if STATTIME > 0
-	    "        -s enables statistics output\n"
-	    "        -l enables long statistics format\n"
-#endif
 	    "        -D goes daemon ; implies -q\n"
 	    "        -q quiet mode : don't display messages\n"
 	    "        -c check mode : only check config file and exit\n"
@@ -1356,15 +1326,9 @@ struct task *task_queue(struct task *task) {
     if (task->prev == NULL) {
 	//	start_from = list;
 	start_from = list->prev;
-#if STATTIME > 0
-	stats_tsk_new++;
-#endif
 	/* insert the unlinked <task> into the list, searching back from the last entry */
 	while (start_from != list && tv_cmp2(&task->expire, &start_from->expire) < 0) {
 	    start_from = start_from->prev;
-#if STATTIME > 0
-	    stats_tsk_nsrch++;
-#endif
 	}
 	
 	//	  while (start_from->next != list && tv_cmp2(&task->expire, &start_from->next->expire) > 0) {
@@ -1376,15 +1340,8 @@ struct task *task_queue(struct task *task) {
 	     tv_cmp2(&task->expire, &task->prev->expire) >= 0) { /* walk right */
 	start_from = task->next;
 	if (start_from == list || tv_cmp2(&task->expire, &start_from->expire) <= 0) {
-#if STATTIME > 0
-	    stats_tsk_good++;
-#endif
 	    return task; /* it's already in the right place */
 	}
-
-#if STATTIME > 0
-	stats_tsk_right++;
-#endif
 
 	/* if the task is not at the right place, there's little chance that
 	 * it has only shifted a bit, and it will nearly always be queued
@@ -1395,17 +1352,11 @@ struct task *task_queue(struct task *task) {
 	start_from = list->prev; /* assume we'll queue to the end of the list */
 	while (start_from != list && tv_cmp2(&task->expire, &start_from->expire) < 0) {
 	    start_from = start_from->prev;
-#if STATTIME > 0
-	    stats_tsk_lsrch++;
-#endif
 	}
 #else /* WE_REALLY_... */
 	/* insert the unlinked <task> into the list, searching after position <start_from> */
 	while (start_from->next != list && tv_cmp2(&task->expire, &start_from->next->expire) > 0) {
 	    start_from = start_from->next;
-#if STATTIME > 0
-	    stats_tsk_rsrch++;
-#endif
 	}
 #endif /* WE_REALLY_... */
 
@@ -1413,24 +1364,15 @@ struct task *task_queue(struct task *task) {
 	task_delete(task);
     }
     else { /* walk left. */
-#if STATTIME > 0
-	stats_tsk_left++;
-#endif
 #ifdef LEFT_TO_TOP	/* not very good */
 	start_from = list;
 	while (start_from->next != list && tv_cmp2(&task->expire, &start_from->next->expire) > 0) {
 	    start_from = start_from->next;
-#if STATTIME > 0
-	    stats_tsk_lsrch++;
-#endif
 	}
 #else
 	start_from = task->prev->prev; /* valid because of the previous test above */
 	while (start_from != list && tv_cmp2(&task->expire, &start_from->expire) < 0) {
 	    start_from = start_from->prev;
-#if STATTIME > 0
-	    stats_tsk_lsrch++;
-#endif
 	}
 #endif
 	/* we need to unlink it now */
@@ -1449,21 +1391,6 @@ struct task *task_queue(struct task *task) {
 /*********************************************************************/
 
 /* some prototypes */
-
-/* This either returns the sockname or the original destination address. Code
- * inspired from Patrick Schaaf's example of nf_getsockname() implementation.
- */
-static int get_original_dst(int fd, struct sockaddr_in *sa, socklen_t *salen) {
-#if defined(TPROXY) && defined(SO_ORIGINAL_DST)
-    return getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, (void *)sa, salen);
-#else
-#if defined(TPROXY) && defined(USE_GETSOCKNAME)
-    return getsockname(fd, (struct sockaddr *)sa, salen);
-#else
-    return -1;
-#endif
-#endif
-}
 
 /*
  * frees  the context associated to a session. It must have been removed first.
@@ -1911,9 +1838,7 @@ int event_accept(int fd) {
 	    struct sockaddr_in sockname;
 	    socklen_t namelen = sizeof(sockname);
 	    int len;
-	    if (addr.ss_family != AF_INET ||
-		!(s->proxy->options & PR_O_TRANSP) ||
-		get_original_dst(cfd, (struct sockaddr_in *)&sockname, &namelen) == -1)
+	    if (addr.ss_family != AF_INET)
 		getsockname(cfd, (struct sockaddr *)&sockname, &namelen);
 
 	    if (s->cli_addr.ss_family == AF_INET) {
@@ -2916,14 +2841,6 @@ int epoll_loop(int action) {
       if (!actconn && listeners == 0)
 	  break;
 
-#if STATTIME > 0
-      {
-	  int time2;
-	  time2 = stats();
-	  next_time = MINTIME(time2, next_time);
-      }
-#endif
-
       for (fds = 0; (fds << INTBITS) < maxfd; fds++) {
 	  
 	  rn = ((int*)StaticReadEvent)[fds];  ro = ((int*)PrevReadEvent)[fds];
@@ -3032,7 +2949,6 @@ int epoll_loop(int action) {
 #endif
 
 
-
 #if defined(ENABLE_POLL)
 
 /*
@@ -3080,15 +2996,6 @@ int poll_loop(int action) {
       /* stop when there's no connection left and we don't allow them anymore */
       if (!actconn && listeners == 0)
 	  break;
-
-#if STATTIME > 0
-      {
-	  int time2;
-	  time2 = stats();
-	  next_time = MINTIME(time2, next_time);
-      }
-#endif
-
 
       nbfd = 0;
       for (fds = 0; (fds << INTBITS) < maxfd; fds++) {
@@ -3201,14 +3108,6 @@ int select_loop(int action) {
       if (!actconn && listeners == 0)
 	  break;
 
-#if STATTIME > 0
-      {
-	  int time2;
-	  time2 = stats();
-	  next_time = MINTIME(time2, next_time);
-      }
-#endif
-
       if (next_time > 0) {  /* FIXME */
 	  /* Convert to timeval */
 	  /* to avoid eventual select loops due to timer precision */
@@ -3311,41 +3210,6 @@ void sig_dump_state(int sig) {
     }
     signal(sig, sig_dump_state);
 }
-
-#ifdef DEBUG_MEMORY
-static void fast_stop(void)
-{
-    struct proxy *p;
-    p = proxy;
-    while (p) {
-        p->grace = 0;
-	p = p->next;
-    }
-    soft_stop();
-}
-
-void sig_int(int sig) {
-    /* This would normally be a hard stop,
-       but we want to be sure about deallocation,
-       and so on, so we do a soft stop with
-       0 GRACE time
-    */
-    fast_stop();
-    /* If we are killed twice, we decide to die*/
-    signal(sig, SIG_DFL);
-}
-
-void sig_term(int sig) {
-    /* This would normally be a hard stop,
-       but we want to be sure about deallocation,
-       and so on, so we do a soft stop with
-       0 GRACE time
-    */
-    fast_stop();
-    /* If we are killed twice, we decide to die*/
-    signal(sig, SIG_DFL);
-}
-#endif
 
 /* returns the pointer to an error in the replacement string, or NULL if OK */
 char *chain_regex(struct hdr_exp **head, regex_t *preg, int action, char *replace) {
@@ -3626,13 +3490,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	    Alert("parsing [%s:%d] : '%s' expects an option name.\n", file, linenum, args[0]);
 	    return -1;
 	}
-	if (!strcmp(args[1], "redispatch"))
-	    /* enable reconnections to dispatch */
-	    curproxy->options |= PR_O_REDISP;
-	else if (!strcmp(args[1], "keepalive"))
-	    /* enable keep-alive */
-	    curproxy->options |= PR_O_KEEPALIVE;
-	else if (!strcmp(args[1], "httpclose"))
+	if (!strcmp(args[1], "httpclose"))
 	    /* force connection: close in both directions in HTTP mode */
 	    curproxy->options |= PR_O_HTTP_CLOSE;
 	else if (!strcmp(args[1], "forceclose"))
@@ -4836,10 +4694,6 @@ int main(int argc, char **argv) {
     init(argc, argv);
 
     signal(SIGHUP, sig_dump_state);
-#ifdef DEBUG_MEMORY
-    signal(SIGINT, sig_int);
-    signal(SIGTERM, sig_term);
-#endif
 
     /* on very high loads, a sigpipe sometimes happen just between the
      * getsockopt() which tells "it's OK to write", and the following write :-(
