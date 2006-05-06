@@ -75,11 +75,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HTTPTERM_VERSION
-#define HTTPTERM_VERSION "1.0.0"
+#define HTTPTERM_VERSION "1.1.0"
 #endif
 
 #ifndef HTTPTERM_DATE
-#define HTTPTERM_DATE	"2006/05/05"
+#define HTTPTERM_DATE	"2006/05/06"
 #endif
 
 /* this is for libc5 for example */
@@ -119,8 +119,6 @@
 
 // max # args on a configuration line
 #define MAX_LINE_ARGS	40
-
-#define CONN_RETRIES	3
 
 /* Default connections limit.
  *
@@ -288,9 +286,7 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define CL_STHEADERS	0
 #define CL_STWAIT	1
 #define CL_STDATA	2
-#define CL_STSHUTR	3
-#define CL_STSHUTW	4
-#define CL_STCLOSE	5
+#define CL_STCLOSE	3
 
 /* possible socket states */
 #define SKST_SCR	1	/* client socket shut on the read direction */
@@ -373,7 +369,6 @@ struct session {
     int cli_fd;				/* the client side fd */
     int cli_state;			/* state of the client side */
     int sock_st;			/* socket states : SKST_S[CS][RW] */
-    int conn_retries;			/* number of connect retries left */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
     unsigned long to_write;		/* #of response data bytes to write after headers */
@@ -385,6 +380,9 @@ struct session {
 	long  t_queue;			/* delay before the session gets out of the connect queue, -1 if never occurs */
     } logs;
     unsigned int uniq_id;		/* unique ID used for the traces */
+    char *uri;				/* the requested URI within the buffer */
+    int req_code, req_size;		/* values passed in the URI to override the server's */
+    int req_cache, req_time;
 };
 
 struct listener {
@@ -407,7 +405,6 @@ struct proxy {
     int nbconn;				/* # of active sessions */
     unsigned int cum_conn;		/* cumulated number of processed sessions */
     int maxconn;			/* max # of active sessions */
-    int conn_retries;			/* maximum number of connect retries */
     int options;			/* PR_O_* ... */
     struct proxy *next;
     struct timeval stop_time;		/* date to stop listening, when stopping != 0 */
@@ -574,6 +571,28 @@ const char *HTTP_504 =
 	"Connection: close\r\n"
 	"\r\n"
 	"<html><body><h1>504 Gateway Time-out</h1>\nThe server didn't respond in time.\n</body></html>\n";
+
+const char *HTTP_HELP =
+	"HTTP/1.0 200\r\n"
+	"Cache-Control: no-cache\r\n"
+	"Connection: close\r\n"
+	"\r\n"
+	"<html><body><h1>HTTPTerm-" HTTPTERM_VERSION " - " HTTPTERM_DATE "</h1>\n"
+	"The following arguments are supported to override the default objects:<br><ul>\n"
+	"<li> /?s=&lt;<b>size</b>&gt;[kmg] :\n"
+	"  return &lt;<b>size</b>&gt; bytes (may be kB, MB, GB).    Eg: /?s=20k\n"
+	"<li> /?r=&lt;<b>retcode</b>&gt;   :\n"
+	"  present &lt;<b>retcode</b>&gt; as the HTTP return code.  Eg: /?r=404\n"
+	"<li> /?c=&lt;<b>cache</b>&gt;     :\n"
+	"  set the return as <b>not cacheable if zero</b>.          Eg: /?c=0\n"
+	"<li> /?t=&lt;<b>time</b>&gt;      :\n"
+	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
+	"</ul>\n"
+	"Note that those arguments may be cumulated on one line separated by\n"
+	" the '<b>&amp;</b>' sign :<br><ul>\n"
+	"<li><tt>  GET /?s=20k&c=1&t=700 HTTP/1.0      </tt>\n"
+	"<li><tt>  GET /?r=500&s=0&c=0&t=1000 HTTP/1.0 </tt>\n"
+	"</ul></body></html>\n";
 
 /*********************************************************************/
 /*  function prototypes  *********************************************/
@@ -1600,7 +1619,7 @@ void client_retnclose(struct session *s, int len, const char *msg) {
     tv_eternity(&s->crexpire);
     tv_delayfrom(&s->cwexpire, &now, s->proxy->clitimeout);
     shutdown(s->cli_fd, SHUT_RD);
-    s->cli_state = CL_STSHUTR;
+    s->cli_state = CL_STDATA;
     strcpy(s->rep->data, msg);
     s->rep->l = len;
     s->rep->r = s->rep->h = s->rep->lr = s->rep->w = s->rep->data;
@@ -1715,7 +1734,8 @@ int event_accept(int fd) {
 	s->res_cr = s->res_cw  = RES_SILENT;
 	s->cli_fd = cfd;
 	s->srv = NULL;
-	s->conn_retries = p->conn_retries;
+	s->uri = NULL;
+	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -1895,8 +1915,14 @@ static int ishex(char s)
 static inline void srv_return_page(struct session *t) {
     int hlen;
     struct server *srv;
+    int code, cache, size, time;
 
     srv = t->srv;
+
+    code = (t->req_code == -1) ? srv->resp_code : t->req_code;
+    cache = (t->req_cache == -1) ? srv->resp_cache : t->req_cache;
+    size = (t->req_size < 0) ? srv->resp_size : t->req_size;
+    time = (t->req_time < 0) ? srv->resp_time : t->req_time;
 
     hlen = sprintf(t->rep->data,
 		   "HTTP/1.0 %03d\r\n"
@@ -1905,13 +1931,14 @@ static inline void srv_return_page(struct session *t) {
 		   "X-req: size=%ld, time=%ld ms\r\n"
 		   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
 		   "\r\n",
-		   srv->resp_code,
-		   srv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
+		   code,
+		   cache ? "" : "Cache-Control: no-cache\r\n",
 		   (long)t->req->total, t->logs.t_request, 
-		   srv->id, srv->resp_code, srv->resp_cache, srv->resp_size, srv->resp_time,
+		   srv->id, code, cache,
+		   size, time,
 		   t->logs.t_queue - t->logs.t_request);
 
-    t->to_write = srv->resp_size;
+    t->to_write = size;
     t->rep->l = hlen;
     t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
     t->rep->r += hlen;
@@ -1973,9 +2000,12 @@ int process_cli(struct session *t) {
 
 		tv_eternity(&t->crexpire);
 
-		if (t->srv->resp_time) {
+		if (t->req_time < 0)
+		    t->req_time = t->srv->resp_time;
+
+		if (t->req_time) {
 		    /* we have to wait for the response */
-		    tv_delayfrom(&t->cnexpire, &now, t->srv->resp_time);
+		    tv_delayfrom(&t->cnexpire, &now, t->req_time);
 		    t->cli_state = CL_STWAIT;
 		    return 1;
 		}
@@ -2010,6 +2040,65 @@ int process_cli(struct session *t) {
 		len += strlcpy2(trash + len, req->h, max + 1);
 		trash[len++] = '\n';
 		write(1, trash, len);
+	    }
+
+	    /* right now we have a full header line */
+	    if (!t->uri) {
+		t->uri = req->h;
+		*ptr = '\0';
+
+		/* we'll check for the following URIs :
+		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
+		 * /? to get the help page.
+		 */
+		if (!memcmp(t->uri, "GET /?", 6)) {
+		    char *arg, *next;
+		    long result, mult;
+
+		    next = arg = t->uri + 6;
+		    if (next == ptr || *next == ' ') {
+			client_retnclose(t, strlen(HTTP_HELP), HTTP_HELP);
+			return 1;
+		    }
+
+		    while (arg + 2 <= ptr && arg[1] == '=') {
+			result = strtol(arg + 2, &next, 0);
+			if (next > arg + 2) {
+			    mult = 0;
+			    do {
+				if (*next == 'k' || *next == 'K')
+				    mult += 10;
+				else if (*next == 'm' || *next == 'M')
+				    mult += 20;
+				else if (*next == 'g' || *next == 'G')
+				    mult += 30;
+				else
+				    break;
+				next++;
+			    } while (*next);
+
+			    switch (*arg) {
+			    case 's':
+				t->req_size = result << mult;
+				break;
+			    case 'r':
+				t->req_code = result << mult;
+				break;
+			    case 't':
+				t->req_time = result << mult;
+				break;
+			    case 'c':
+				t->req_cache = result << mult;
+				break;
+			    }
+			    arg = next;
+			}
+			if (*arg == '&')
+			    arg++;
+			else
+			    break;
+		    }
+		}
 	    }
 
 	    /* WARNING: ptr is not valid anymore, since the header may have been deleted or truncated ! */
@@ -2812,7 +2901,6 @@ void init_default_instance() {
     memset(&defproxy, 0, sizeof(defproxy));
     defproxy.state = PR_STNEW;
     defproxy.maxconn = global.maxconn;
-    defproxy.conn_retries = CONN_RETRIES;
 }
 
 /*
@@ -2851,7 +2939,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	/* set default values */
 	curproxy->state = defproxy.state;
 	curproxy->maxconn = defproxy.maxconn;
-	curproxy->conn_retries = defproxy.conn_retries;
 	curproxy->options = defproxy.options;
 
 	if (defproxy.errmsg.msg400)
