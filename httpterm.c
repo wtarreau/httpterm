@@ -1730,6 +1730,7 @@ int event_accept(int fd) {
 	s->cli_state = CL_STHEADERS;
 	s->sock_st = 0;
 	s->req = s->rep = NULL; /* will be allocated later */
+        s->to_write = 0;
 
 	s->res_cr = s->res_cw  = RES_SILENT;
 	s->cli_fd = cfd;
