@@ -72,10 +72,6 @@
 #endif
 #endif
 
-#ifdef DEBUG_FULL
-#include <assert.h>
-#endif
-
 #include "include/mini-clist.h"
 
 #ifndef HTTPTERM_VERSION
@@ -290,15 +286,17 @@ int strlcpy2(char *dst, const char *src, int size) {
 
 /* different possible states for the client side */
 #define CL_STHEADERS	0
-#define CL_STDATA	1
-#define CL_STSHUTR	2
-#define CL_STSHUTW	3
-#define CL_STCLOSE	4
+#define CL_STWAIT	1
+#define CL_STDATA	2
+#define CL_STSHUTR	3
+#define CL_STSHUTW	4
+#define CL_STCLOSE	5
 
-/* different possible states for the server side */
-#define SV_STIDLE	0
-#define SV_STCONN	1
-#define SV_STCLOSE	2
+/* possible socket states */
+#define SKST_SCR	1	/* client socket shut on the read direction */
+#define SKST_SCW	2	/* client socket shut on the write direction */
+#define SKST_SSR	4	/* server socket shut on the read direction */
+#define SKST_SSW	8	/* server socket shut on the write direction */
 
 /* result of an I/O event */
 #define	RES_SILENT	0	/* didn't happen */
@@ -314,13 +312,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define	MODE_VERBOSE	64
 #define	MODE_STARTING	128
 #define	MODE_FOREGROUND	256
-
-/* function which act on servers need to return various errors */
-#define SRV_STATUS_OK       0   /* everything is OK. */
-#define SRV_STATUS_INTERNAL 1   /* other unrecoverable errors. */
-#define SRV_STATUS_NOSRV    2   /* no server is available */
-#define SRV_STATUS_FULL     3   /* the/all server(s) are saturated */
-#define SRV_STATUS_QUEUED   4   /* the/all server(s) are saturated but the connection was queued */
 
 /* configuration sections */
 #define CFG_NONE	0
@@ -381,7 +372,7 @@ struct session {
     struct proxy *proxy;		/* the proxy this socket belongs to */
     int cli_fd;				/* the client side fd */
     int cli_state;			/* state of the client side */
-    int srv_state;			/* state of the server side */
+    int sock_st;			/* socket states : SKST_S[CS][RW] */
     int conn_retries;			/* number of connect retries left */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
@@ -583,15 +574,6 @@ const char *HTTP_504 =
 	"Connection: close\r\n"
 	"\r\n"
 	"<html><body><h1>504 Gateway Time-out</h1>\nThe server didn't respond in time.\n</body></html>\n";
-
-
-/*********************************************************************/
-/*  debugging  *******************************************************/
-/*********************************************************************/
-#ifdef DEBUG_FULL
-static char *cli_stnames[5] = {"HDR", "DAT", "SHR", "SHW", "CLS" };
-static char *srv_stnames[8] = {"IDL", "PND", "CON", "HDR", "DAT", "SHR", "SHW", "CLS" };
-#endif
 
 /*********************************************************************/
 /*  function prototypes  *********************************************/
@@ -1411,10 +1393,6 @@ int event_cli_read(int fd) {
     struct buffer *b = s->req;
     int ret, max;
 
-#ifdef DEBUG_FULL
-    fprintf(stderr,"event_cli_read : fd=%d, s=%p\n", fd, s);
-#endif
-
     if (fdtab[fd].state != FD_STERROR) {
 #ifdef FILL_BUFFERS
 	while (1)
@@ -1516,10 +1494,6 @@ int event_cli_write(int fd) {
     struct buffer *b = s->rep;
     char *data_ptr;
     int ret, max;
-
-#ifdef DEBUG_FULL
-    fprintf(stderr,"event_cli_write : fd=%d, s=%p\n", fd, s);
-#endif
 
     if (b->l == 0) { /* let's realign the buffer to optimize I/O */
 	b->r = b->w = b->h = b->lr  = b->data;
@@ -1735,7 +1709,7 @@ int event_accept(int fd) {
 	s->task = t;
 	s->proxy = p;
 	s->cli_state = CL_STHEADERS;
-	s->srv_state = SV_STIDLE;
+	s->sock_st = 0;
 	s->req = s->rep = NULL; /* will be allocated later */
 
 	s->res_cr = s->res_cw  = RES_SILENT;
@@ -1813,12 +1787,6 @@ int event_accept(int fd) {
 
 	FD_SET(cfd, StaticReadEvent);
 
-#if defined(DEBUG_FULL) && defined(ENABLE_EPOLL)
-	if (PrevReadEvent) {
-	    assert(!(FD_ISSET(cfd, PrevReadEvent)));
-	    assert(!(FD_ISSET(cfd, PrevWriteEvent)));
-	}
-#endif
 	fd_insert(cfd);
 
 	tv_eternity(&s->cnexpire);
@@ -1919,27 +1887,48 @@ static int ishex(char s)
     return (s >= '0' && s <= '9') || (s >= 'A' && s <= 'F') || (s >= 'a' && s <= 'f');
 }
 
+
+/* This function builds a response and sets
+ * indicators accordingly. Note that if <status> is 0, no message is
+ * returned.
+ */
+static inline void srv_return_page(struct session *t) {
+    int hlen;
+    struct server *srv;
+
+    srv = t->srv;
+
+    hlen = sprintf(t->rep->data,
+		   "HTTP/1.0 %03d\r\n"
+		   "Connection: close\r\n"
+		   "%s"
+		   "X-req: size=%ld, time=%ld ms\r\n"
+		   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
+		   "\r\n",
+		   srv->resp_code,
+		   srv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
+		   (long)t->req->total, t->logs.t_request, 
+		   srv->id, srv->resp_code, srv->resp_cache, srv->resp_size, srv->resp_time,
+		   t->logs.t_queue - t->logs.t_request);
+
+    t->to_write = srv->resp_size;
+    t->rep->l = hlen;
+    t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
+    t->rep->r += hlen;
+    t->req->l = 0;
+}
+
+
 /*
  * manages the client FSM and its socket. BTW, it also tries to handle the
  * cookie. It returns 1 if a state has changed (and a resync may be needed),
  * 0 else.
  */
 int process_cli(struct session *t) {
-    int s = t->srv_state;
     int c = t->cli_state;
     struct buffer *req = t->req;
     struct buffer *rep = t->rep;
 
-#ifdef DEBUG_FULL
-    fprintf(stderr,"process_cli: c=%s s=%s set(r,w)=%d,%d exp(r,w)=%d.%d,%d.%d\n",
-	    cli_stnames[c], srv_stnames[s],
-	    FD_ISSET(t->cli_fd, StaticReadEvent), FD_ISSET(t->cli_fd, StaticWriteEvent),
-	    t->crexpire.tv_sec, t->crexpire.tv_usec,
-	    t->cwexpire.tv_sec, t->cwexpire.tv_usec);
-#endif
-    //fprintf(stderr,"process_cli: c=%d, s=%d, cr=%d, cw=%d, sr=%d, sw=%d\n", c, s,
-    //FD_ISSET(t->cli_fd, StaticReadEvent), FD_ISSET(t->cli_fd, StaticWriteEvent),
-    //);
     if (c == CL_STHEADERS) {
 	/* now parse the partial (or complete) headers */
 	while (req->lr < req->r) { /* this loop only sees one header at each iteration */
@@ -1976,24 +1965,26 @@ int process_cli(struct session *t) {
 		    continue;
 		}
 
-		t->cli_state = CL_STDATA;
 		req->rlim = req->data + BUFSIZE; /* no more rewrite needed */
-
 		t->logs.t_request = tv_diff(&t->logs.tv_accept, &now);
 
-		if (!t->proxy->clitimeout)
-		    /* If the client has no timeout, or if the server is not ready yet,
-		     * and we know for sure that it can expire, then it's cleaner to
-		     * disable the timeout on the client side so that too low values
-		     * cannot make the sessions abort too early.
-		     *
-		     * FIXME-20050705: the server needs a way to re-enable this time-out
-		     * when it switches its state, otherwise a client can stay connected
-		     * indefinitely. This now seems to be OK.
-		     */
-		    tv_eternity(&t->crexpire);
+		t->srv = get_server_rr(t->proxy);
+		t->srv->cur_sess++;
 
-		goto process_data;
+		tv_eternity(&t->crexpire);
+
+		if (t->srv->resp_time) {
+		    /* we have to wait for the response */
+		    tv_delayfrom(&t->cnexpire, &now, t->srv->resp_time);
+		    t->cli_state = CL_STWAIT;
+		    return 1;
+		}
+
+		/* The response must comme immediately, so we'll go through
+		 * CL_STDATA.
+		 */
+		t->logs.t_queue = t->logs.t_request;
+		goto immediate_response;
 	    }
 
 	    /* to get a complete header line, we need the ending \r\n, \n\r, \r or \n too */
@@ -2063,279 +2054,103 @@ int process_cli(struct session *t) {
 
 	return t->cli_state != CL_STHEADERS;
     }
+    else if (c == CL_STWAIT) {
+	if (tv_cmp2_ms(&t->cnexpire, &now) > 0)
+	    return 0; /* nothing changed */
+
+	t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
+    immediate_response:
+	t->cli_state = CL_STDATA;
+	tv_eternity(&t->cnexpire);
+
+	/* FIXME: we could also drain data */
+	FD_SET(t->cli_fd, StaticWriteEvent);
+	if (t->proxy->clitimeout)
+	    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
+
+	srv_return_page(t);
+	return 1;
+    }
     else if (c == CL_STDATA) {
-    process_data:
-	/* FIXME: this error handling is partly buggy because we always report
-	 * a 'DATA' phase while we don't know if the server was in IDLE, CONN
-	 * or HEADER phase. BTW, it's not logical to expire the client while
-	 * we're waiting for the server to connect.
-	 */
-	/* read or write error */
-	if (t->res_cw == RES_ERROR || t->res_cr == RES_ERROR) {
+	if ((!(t->sock_st & SKST_SCW) && t->res_cw == RES_ERROR) ||
+	    (!(t->sock_st & SKST_SCR) && t->res_cr == RES_ERROR)) {
+	terminate_client:
+	    /* read or write error */
 	    tv_eternity(&t->crexpire);
 	    tv_eternity(&t->cwexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
 	    return 1;
 	}
-	/* last read, or end of server write */
-	else if (t->res_cr == RES_NULL || s == SV_STCLOSE) {
-	    FD_CLR(t->cli_fd, StaticReadEvent);
-	    tv_eternity(&t->crexpire);
-	    shutdown(t->cli_fd, SHUT_RD);
-	    t->cli_state = CL_STSHUTR;
-	    goto cl_stshutr;
-	}	
-	/* read timeout */
-	else if (tv_cmp2_ms(&t->crexpire, &now) <= 0) {
-	    FD_CLR(t->cli_fd, StaticReadEvent);
-	    tv_eternity(&t->crexpire);
-	    shutdown(t->cli_fd, SHUT_RD);
-	    t->cli_state = CL_STSHUTR;
-	    return 1;
-	}	
-	/* write timeout */
-	else if (tv_cmp2_ms(&t->cwexpire, &now) <= 0) {
-	    FD_CLR(t->cli_fd, StaticWriteEvent);
-	    tv_eternity(&t->cwexpire);
-	    shutdown(t->cli_fd, SHUT_WR);
-	    /* We must ensure that the read part is still alive when switching
-	     * to shutw */
-	    FD_SET(t->cli_fd, StaticReadEvent);
-	    if (t->proxy->clitimeout)
-		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
 
-	    t->cli_state = CL_STSHUTW;
-	    return 1;
-	}
-
-	if (req->l >= req->rlim - req->data) {
-	    /* no room to read more data */
-	    if (FD_ISSET(t->cli_fd, StaticReadEvent)) {
-		/* stop reading until we get some space */
+	if (!(t->sock_st & SKST_SCR)) {
+	    if (t->res_cr == RES_NULL || tv_cmp2_ms(&t->crexpire, &now) <= 0) {
+		/* last read, or read timeout */
+		t->sock_st |= SKST_SCR;
+		if (t->sock_st & SKST_SCW)
+		    goto terminate_client;
 		FD_CLR(t->cli_fd, StaticReadEvent);
 		tv_eternity(&t->crexpire);
+		shutdown(t->cli_fd, SHUT_RD);
 	    }
-	}
-	else {
-	    /* there's still some space in the buffer */
-	    if (! FD_ISSET(t->cli_fd, StaticReadEvent)) {
-		FD_SET(t->cli_fd, StaticReadEvent);
-		if (!t->proxy->clitimeout)
-		    /* If the client has no timeout, or if the server not ready yet, and we
-		     * know for sure that it can expire, then it's cleaner to disable the
-		     * timeout on the client side so that too low values cannot make the
-		     * sessions abort too early.
-		     */
-		    tv_eternity(&t->crexpire);
-		else
-		    tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
+	    else {
+		if (req->l >= req->rlim - req->data) {
+		    /* no room to read more data */
+		    if (FD_ISSET(t->cli_fd, StaticReadEvent)) {
+			/* stop reading until we get some space */
+			FD_CLR(t->cli_fd, StaticReadEvent);
+			tv_eternity(&t->crexpire);
+		    }
+		}
+		else {
+		    /* there's still some space in the buffer */
+		    if (! FD_ISSET(t->cli_fd, StaticReadEvent)) {
+			FD_SET(t->cli_fd, StaticReadEvent);
+			if (!t->proxy->clitimeout)
+			    tv_eternity(&t->crexpire);
+			else
+			    tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
+		    }
+		}
 	    }
 	}
 
-	if ((rep->l == 0 && t->to_write == 0) ||
-	    ((s < SV_STCLOSE) /* FIXME: this may be optimized && (rep->w == rep->h)*/)) {
-	    if (FD_ISSET(t->cli_fd, StaticWriteEvent)) {
-		FD_CLR(t->cli_fd, StaticWriteEvent); /* stop writing */
+	if (!(t->sock_st & SKST_SCW)) {
+	    if (tv_cmp2_ms(&t->cwexpire, &now) <= 0) {
+		/* write timeout */
+		t->sock_st |= SKST_SCW;
+		if (t->sock_st & SKST_SCR)
+		    goto terminate_client;
+		FD_CLR(t->cli_fd, StaticWriteEvent);
 		tv_eternity(&t->cwexpire);
-	    }
-	}
-	else { /* buffer not empty */
-	    if (! FD_ISSET(t->cli_fd, StaticWriteEvent)) {
-		FD_SET(t->cli_fd, StaticWriteEvent); /* restart writing */
-		if (t->proxy->clitimeout) {
-		    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
-		    /* FIXME: to prevent the client from expiring read timeouts during writes,
-		     * we refresh it. */
-		    t->crexpire = t->cwexpire;
+		shutdown(t->cli_fd, SHUT_WR);
+	    } else {
+		if ((rep->l == 0 && t->to_write == 0)) {
+		    /* this is the end */
+		    goto terminate_client;
 		}
-		else
-		    tv_eternity(&t->cwexpire);
+		else { /* buffer not empty */
+		    if (! FD_ISSET(t->cli_fd, StaticWriteEvent)) {
+			FD_SET(t->cli_fd, StaticWriteEvent); /* restart writing */
+			if (t->proxy->clitimeout) {
+			    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
+			    /* FIXME: to prevent the client from expiring read timeouts during writes,
+			     * we refresh it. */
+			    t->crexpire = t->cwexpire;
+			}
+			else
+			    tv_eternity(&t->cwexpire);
+		    }
+		}
 	    }
 	}
+
 	return 0; /* other cases change nothing */
-    }
-    else if (c == CL_STSHUTR) {
-    cl_stshutr:
-	if (t->res_cw == RES_ERROR) {
-	    tv_eternity(&t->cwexpire);
-	    fd_delete(t->cli_fd);
-	    t->cli_state = CL_STCLOSE;
-	    return 1;
-	}
-	else if ((s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
-	    tv_eternity(&t->cwexpire);
-	    fd_delete(t->cli_fd);
-	    t->cli_state = CL_STCLOSE;
-	    return 1;
-	}
-	else if (tv_cmp2_ms(&t->cwexpire, &now) <= 0) {
-	    tv_eternity(&t->cwexpire);
-	    fd_delete(t->cli_fd);
-	    t->cli_state = CL_STCLOSE;
-	    return 1;
-	}
-	else if ((rep->l == 0 && t->to_write == 0)) {
-	    if (FD_ISSET(t->cli_fd, StaticWriteEvent)) {
-		FD_CLR(t->cli_fd, StaticWriteEvent); /* stop writing */
-		tv_eternity(&t->cwexpire);
-	    }
-	}
-	else { /* buffer not empty */
-	    if (! FD_ISSET(t->cli_fd, StaticWriteEvent)) {
-		FD_SET(t->cli_fd, StaticWriteEvent); /* restart writing */
-		if (t->proxy->clitimeout) {
-		    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
-		    /* FIXME: to prevent the client from expiring read timeouts during writes,
-		     * we refresh it. */
-		    t->crexpire = t->cwexpire;
-		}
-		else
-		    tv_eternity(&t->cwexpire);
-	    }
-	}
-	return 0;
-    }
-    else if (c == CL_STSHUTW) {
-	if (t->res_cr == RES_ERROR) {
-	    tv_eternity(&t->crexpire);
-	    fd_delete(t->cli_fd);
-	    t->cli_state = CL_STCLOSE;
-	    return 1;
-	}
-	else if (t->res_cr == RES_NULL || s == SV_STCLOSE) {
-	    tv_eternity(&t->crexpire);
-	    fd_delete(t->cli_fd);
-	    t->cli_state = CL_STCLOSE;
-	    return 1;
-	}
-	else if (tv_cmp2_ms(&t->crexpire, &now) <= 0) {
-	    tv_eternity(&t->crexpire);
-	    fd_delete(t->cli_fd);
-	    t->cli_state = CL_STCLOSE;
-	    return 1;
-	}
-	else if (req->l >= req->rlim - req->data) {
-	    /* no room to read more data */
-
-	    /* FIXME-20050705: is it possible for a client to maintain a session
-	     * after the timeout by sending more data after it receives a close ?
-	     */
-
-	    if (FD_ISSET(t->cli_fd, StaticReadEvent)) {
-		/* stop reading until we get some space */
-		FD_CLR(t->cli_fd, StaticReadEvent);
-		tv_eternity(&t->crexpire);
-		//fprintf(stderr,"%p:%s(%d), c=%d, s=%d\n", t, __FUNCTION__, __LINE__, t->cli_state, t->cli_state);
-	    }
-	}
-	else {
-	    /* there's still some space in the buffer */
-	    if (! FD_ISSET(t->cli_fd, StaticReadEvent)) {
-		FD_SET(t->cli_fd, StaticReadEvent);
-		if (t->proxy->clitimeout)
-		    tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
-		else
-		    tv_eternity(&t->crexpire);
-		//fprintf(stderr,"%p:%s(%d), c=%d, s=%d\n", t, __FUNCTION__, __LINE__, t->cli_state, t->cli_state);
-	    }
-	}
-	return 0;
     }
     else { /* CL_STCLOSE: nothing to do */
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	    int len;
 	    len = sprintf(trash, "%08x:%s.clicls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)-1);
-	    write(1, trash, len);
-	}
-	return 0;
-    }
-    return 0;
-}
-
-/* This function turns the server state into the SV_STCLOSE, and sets
- * indicators accordingly. Note that if <status> is 0, no message is
- * returned.
- */
-static inline void srv_return_page(struct session *t) {
-    int hlen;
-    struct server *srv;
-
-    t->srv_state = SV_STCLOSE;
-    srv = t->srv;
-
-    hlen = sprintf(t->rep->data,
-		   "HTTP/1.0 %03d\r\n"
-		   "Connection: close\r\n"
-		   "%s"
-		   "X-req: size=%ld, time=%ld ms\r\n"
-		   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
-		   "\r\n",
-		   srv->resp_code,
-		   srv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
-		   (long)t->req->total, t->logs.t_request, 
-		   srv->id, srv->resp_code, srv->resp_cache, srv->resp_size, srv->resp_time,
-		   t->logs.t_queue - t->logs.t_request);
-
-    t->to_write = srv->resp_size;
-    t->rep->l = hlen;
-    t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
-    t->rep->r += hlen;
-    t->req->l = 0;
-}
-
-
-/*
- * manages the server FSM and its socket. It returns 1 if a state has changed
- * (and a resync may be needed), 0 else.
- */
-int process_srv(struct session *t) {
-    int s = t->srv_state;
-    int c = t->cli_state;
-
-#ifdef DEBUG_FULL
-    fprintf(stderr,"process_srv: c=%s, s=%s\n", cli_stnames[c], srv_stnames[s]);
-#endif
-    if (s == SV_STIDLE) {
-	if (c == CL_STHEADERS)
-	    return 0;	/* stay in idle, waiting for data to reach the client side */
-	else if (c == CL_STCLOSE ||
-		 c == CL_STSHUTW ||
-		 (c == CL_STSHUTR && t->req->l == 0)) { /* give up */
-	    tv_eternity(&t->cnexpire);
-	    t->srv_state = SV_STCLOSE;
-	    return 1;
-	}
-	else {
-	    t->srv = get_server_rr(t->proxy);
-	    if (t->srv->resp_time == 0)
-		goto immediate_response;
-
-	    t->srv->cur_sess++;
-
-	    tv_delayfrom(&t->cnexpire, &now, t->srv->resp_time);
-	    t->srv_state = SV_STCONN;
-	    return 0; /* does not change anything for the client side */
-	}
-    }
-    else if (s == SV_STCONN) { /* connection in progress */
-	if (tv_cmp2_ms(&t->cnexpire, &now) > 0) {
-	    return 0; /* nothing changed */
-	}
-	else {
-	    if (t->srv)
-		t->srv->cur_sess--;
-	immediate_response:
-	    t->logs.t_queue = tv_diff(&t->logs.tv_accept, &now);
-	    tv_eternity(&t->cnexpire);
-	    srv_return_page(t);
-	    return 1;
-	}
-    }
-    else { /* SV_STCLOSE : nothing to do */
-	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
-	    int len;
-	    len = sprintf(trash, "%08x:%s.srvcls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)-1);
 	    write(1, trash, len);
 	}
 	return 0;
@@ -2352,21 +2167,10 @@ int process_srv(struct session *t) {
  */
 int process_session(struct task *t) {
     struct session *s = t->context;
-    int fsm_resync_cli = 1;
-    int fsm_resync_srv = 1;
 
-    do {
-	if (fsm_resync_cli) {
-	    fsm_resync_srv |= process_cli(s);
-	    fsm_resync_cli = 0;
-	}
-	if (fsm_resync_srv) {
-	    fsm_resync_cli |= process_srv(s);
-	    fsm_resync_srv = 0;
-	}
-    } while (fsm_resync_cli || fsm_resync_srv);
+    process_cli(s);
 
-    if (s->cli_state != CL_STCLOSE || s->srv_state != SV_STCLOSE) {
+    if (s->cli_state != CL_STCLOSE) {
 	struct timeval min1;
 	s->res_cw = s->res_cr = RES_SILENT;
 
@@ -2376,16 +2180,11 @@ int process_session(struct task *t) {
 	/* restore t to its place in the task list */
 	task_queue(t);
 
-#ifdef DEBUG_FULL
-	/* DEBUG code : this should never ever happen, otherwise it indicates
-	 * that a task still has something to do and will provoke a quick loop.
-	 */
-	if (tv_remain2(&now, &t->expire) <= 0)
-	    exit(100);
-#endif
-
 	return tv_remain2(&now, &t->expire); /* nothing more to do */
     }
+
+    if (s->srv)
+	s->srv->cur_sess--;
 
     s->proxy->nbconn--;
     actconn--;
