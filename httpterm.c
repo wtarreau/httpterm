@@ -78,12 +78,12 @@
 
 #include "include/mini-clist.h"
 
-#ifndef HAPROXY_VERSION
-#define HAPROXY_VERSION "1.0.0"
+#ifndef HTTPTERM_VERSION
+#define HTTPTERM_VERSION "1.0.0"
 #endif
 
-#ifndef HAPROXY_DATE
-#define HAPROXY_DATE	"2006/05/05"
+#ifndef HTTPTERM_DATE
+#define HTTPTERM_DATE	"2006/05/05"
 #endif
 
 /* this is for libc5 for example */
@@ -128,7 +128,7 @@
 
 /* Default connections limit.
  *
- * A system limit can be enforced at build time in order to avoid using haproxy
+ * A system limit can be enforced at build time in order to avoid using httpterm
  * beyond reasonable system limits. For this, just define SYSTEM_MAXCONN to the
  * absolute limit accepted by the system. If the configuration specifies a
  * higher value, it will be capped to SYSTEM_MAXCONN and a warning will be
@@ -502,15 +502,6 @@ static int listeners = 0;	/* # of listeners */
 static struct timeval now = {0,0};	/* the current date at any moment */
 static struct proxy defproxy;		/* fake proxy used to assign default values on all instances */
 
-/* Here we store informations about the pids of the processes we may pause
- * or kill. We will send them a signal every 10 ms until we can bind to all
- * our ports. With 200 retries, that's about 2 seconds.
- */
-#define MAX_START_RETRIES	200
-static int nb_oldpids = 0;
-static int *oldpids = NULL;
-static int oldpids_sig; /* use USR1 or TERM */
-
 #if defined(ENABLE_EPOLL)
 /* FIXME: this is dirty, but at the moment, there's no other solution to remove
  * the old FDs from outside the loop. Perhaps we should export a global 'poll'
@@ -616,7 +607,7 @@ int process_session(struct task *t);
 /*********************************************************************/
 
 void display_version() {
-    printf("HA-Proxy version " HAPROXY_VERSION " " HAPROXY_DATE"\n");
+    printf("HTTPTerm version " HTTPTERM_VERSION " " HTTPTERM_DATE"\n");
     printf("Copyright 2000-2006 Willy Tarreau <w@w.ods.org>\n\n");
 }
 
@@ -3526,8 +3517,8 @@ void init(int argc, char **argv) {
 	exit(1);
     }
 
-#ifdef HAPROXY_MEMMAX
-    global.rlimit_memmax = HAPROXY_MEMMAX;
+#ifdef HTTPTERM_MEMMAX
+    global.rlimit_memmax = HTTPTERM_MEMMAX;
 #endif
 
     /* initialize the libc's localtime structures once for all so that we
@@ -3591,26 +3582,6 @@ void init(int argc, char **argv) {
 		arg_mode |= MODE_DAEMON | MODE_QUIET;
 	    else if (*flag == 'q')
 		arg_mode |= MODE_QUIET;
-	    else if (*flag == 's' && (flag[1] == 'f' || flag[1] == 't')) {
-		/* list of pids to finish ('f') or terminate ('t') */
-
-		if (flag[1] == 'f')
-		    oldpids_sig = SIGUSR1; /* finish then exit */
-		else
-		    oldpids_sig = SIGTERM; /* terminate immediately */
-		argv++; argc--;
-
-		if (argc > 0) {
-		    oldpids = calloc(argc, sizeof(int));
-		    while (argc > 0) {
-			oldpids[nb_oldpids] = atol(*argv);
-			if (oldpids[nb_oldpids] <= 0)
-			    usage(old_argv);
-			argc--; argv++;
-			nb_oldpids++;
-		    }
-		}
-	    }
 	    else { /* >=2 args */
 		argv++; argc--;
 		if (argc == 0)
@@ -3864,15 +3835,8 @@ void deinit(void) {
     
 } /* end deinit() */
 
-/* sends the signal <sig> to all pids found in <oldpids> */
-static void tell_old_pids(int sig) {
-    int p;
-    for (p = 0; p < nb_oldpids; p++)
-	kill(oldpids[p], sig);
-}
-
 int main(int argc, char **argv) {
-    int err, retry;
+    int err;
     struct rlimit limit;
     FILE *pidfile = NULL;
     init(argc, argv);
@@ -3890,28 +3854,10 @@ int main(int argc, char **argv) {
      * That's at most 1 second. We only send a signal to old pids
      * if we cannot grab at least one port.
      */
-    retry = MAX_START_RETRIES;
-    err = ERR_NONE;
-    while (retry >= 0) {
-	struct timeval w;
-	err = start_proxies(retry == 0 || nb_oldpids == 0);
-	if (err != ERR_RETRYABLE)
-	    break;
-	if (nb_oldpids == 0)
-	    break;
-
-	tell_old_pids(SIGTTOU);
-	/* give some time to old processes to stop listening */
-	w.tv_sec = 0;
-	w.tv_usec = 10*1000;
-	select(0, NULL, NULL, NULL, &w);
-	retry--;
-    }
+    err = start_proxies(1);
 
     /* Note: start_proxies() sends an alert when it fails. */
     if (err != ERR_NONE) {
-	if (retry != MAX_START_RETRIES && nb_oldpids)
-	    tell_old_pids(SIGTTIN);
 	exit(1);
     }
 
@@ -3943,8 +3889,6 @@ int main(int argc, char **argv) {
 	pidfd = open(global.pidfile, O_CREAT | O_WRONLY | O_TRUNC, 0644);
 	if (pidfd < 0) {
 	    Alert("[%s.main()] Cannot create pidfile %s\n", argv[0], global.pidfile);
-	    if (nb_oldpids)
-		tell_old_pids(SIGTTIN);
 	    exit(1);
 	}
 	pidfile = fdopen(pidfd, "w");
@@ -3954,8 +3898,6 @@ int main(int argc, char **argv) {
     if (global.chroot != NULL) {
 	if (chroot(global.chroot) == -1) {
 	    Alert("[%s.main()] Cannot chroot(%s).\n", argv[0], global.chroot);
-	    if (nb_oldpids)
-		tell_old_pids(SIGTTIN);
 	}
 	chdir("/");
     }
@@ -3986,9 +3928,6 @@ int main(int argc, char **argv) {
 	}
 #endif
     }
-
-    if (nb_oldpids)
-	tell_old_pids(oldpids_sig);
 
     /* Note that any error at this stage will be fatal because we will not
      * be able to restart the old pids.
@@ -4022,7 +3961,6 @@ int main(int argc, char **argv) {
 	    ret = fork();
 	    if (ret < 0) {
 		Alert("[%s.main()] Cannot fork.\n", argv[0]);
-		if (nb_oldpids)
 		exit(1); /* there has been an error */
 	    }
 	    else if (ret == 0) /* child breaks here */
