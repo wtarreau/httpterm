@@ -76,7 +76,6 @@
 #include <assert.h>
 #endif
 
-#include "include/appsession.h"
 #include "include/mini-clist.h"
 
 #ifndef HAPROXY_VERSION

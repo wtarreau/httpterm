@@ -92,14 +92,14 @@ LDFLAGS = -g
 
 all: httpterm
 
-httpterm: src/list.o src/chtbl.o src/hashpjw.o httpterm.o
+httpterm: httpterm.o
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f *.[oas] *~ *.rej core httpterm test nohup.out gmon.out src/*.[oas]
+	rm -f *.[oas] *~ *.rej core httpterm test nohup.out gmon.out
 	rm -f httpterm-$(VERSION).tar.gz httpterm-$(VERSION)
 
 tar:	clean
