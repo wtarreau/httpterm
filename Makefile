@@ -18,33 +18,25 @@ CPU = generic
 #CPU = i686
 #CPU = ultrasparc
 
-# By default, we use libc's regex. WARNING! On Solaris 8/Sparc, group
-# references seem broken using libc ! Use pcre instead.
-REGEX=libc
-#REGEX=pcre
-#REGEX=static-pcre
-
 # tools options
 CC = gcc
 LD = gcc
 
-# This is the directory hosting include/pcre.h and lib/libpcre.* when REGEX=pcre
-PCREDIR	:= $(shell pcre-config --prefix 2>/dev/null || :)
-#PCREDIR=/usr/local
+REGEX=libc
 
-# This is for standard Linux 2.6 with netfilter and epoll()
-COPTS.linux26 = -DNETFILTER -DENABLE_POLL -DENABLE_EPOLL
+# This is for standard Linux 2.6 with epoll()
+COPTS.linux26 = -DENABLE_POLL -DENABLE_EPOLL
 LIBS.linux26 =
 
-# This is for enhanced Linux 2.4 with netfilter and epoll() patch.
+# This is for enhanced Linux 2.4 with epoll() patch.
 # Warning! If kernel is 2.4 with epoll-lt <= 0.21, then you must add
 # -DEPOLL_CTL_MOD_WORKAROUND to workaround a very rare bug.
-#COPTS.linux24e = -DNETFILTER -DENABLE_POLL -DENABLE_EPOLL -DUSE_MY_EPOLL -DEPOLL_CTL_MOD_WORKAROUND
-COPTS.linux24e = -DNETFILTER -DENABLE_POLL -DENABLE_EPOLL -DUSE_MY_EPOLL
+#COPTS.linux24e = -DENABLE_POLL -DENABLE_EPOLL -DUSE_MY_EPOLL -DEPOLL_CTL_MOD_WORKAROUND
+COPTS.linux24e = -DENABLE_POLL -DENABLE_EPOLL -DUSE_MY_EPOLL
 LIBS.linux24e =
 
-# This is for standard Linux 2.4 with netfilter but without epoll()
-COPTS.linux24 = -DNETFILTER -DENABLE_POLL
+# This is for standard Linux 2.4 without epoll()
+COPTS.linux24 = -DENABLE_POLL
 LIBS.linux24 =
 
 # This is for Linux 2.2
@@ -64,14 +56,6 @@ COPTS.ultrasparc = -O6 -mcpu=v9 -mtune=ultrasparc
 # options for standard regex library
 COPTS.libc=
 LIBS.libc=
-
-# options for libpcre
-COPTS.pcre=-DUSE_PCRE -I$(PCREDIR)/include
-LIBS.pcre=-L$(PCREDIR)/lib -lpcreposix -lpcre
-
-# options for static libpcre
-COPTS.static-pcre=-DUSE_PCRE -I$(PCREDIR)/include
-LIBS.static-pcre=-L$(PCREDIR)/lib -Wl,-Bstatic -lpcreposix -lpcre -Wl,-Bdynamic
 
 # you can enable debug arguments with "DEBUG=-g" or disable them with "DEBUG="
 #DEBUG = -g -DDEBUG_MEMORY -DDEBUG_FULL

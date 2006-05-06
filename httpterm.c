@@ -56,13 +56,6 @@
 #include <sys/resource.h>
 #include <time.h>
 
-#ifdef USE_PCRE
-#include <pcre.h>
-#include <pcreposix.h>
-#else
-#include <regex.h>
-#endif
-
 #if defined(__dietlibc__)
 #include <strings.h>
 #endif
@@ -131,12 +124,6 @@
 
 // max # args on a configuration line
 #define MAX_LINE_ARGS	40
-
-// max # of added headers per request
-#define MAX_NEWHDR	10
-
-// max # of matches per regexp
-#define	MAX_MATCH	10
 
 #define CONN_RETRIES	3
 
@@ -303,12 +290,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define PR_O_FORCE_CLO	0x00200000	/* enforce the connection close immediately after server response */
 
 /* various session flags, bits values 0x01 to 0x20 (shift 0) */
-#define SN_DIRECT	0x00000001	/* connection made on the server matching the client cookie */
-#define SN_CLDENY	0x00000002	/* a client header matches a deny regex */
-#define SN_CLALLOW	0x00000004	/* a client header matches an allow regex */
-#define SN_SVDENY	0x00000008	/* a server header matches a deny regex */
-#define SN_SVALLOW	0x00000010	/* a server header matches an allow regex */
-#define	SN_POST		0x00000020	/* the request was an HTTP POST */
 
 /* session termination conditions, bits values 0x100 to 0x700 (0-7 shift 8) */
 #define SN_ERR_NONE     0x00000000
@@ -347,10 +328,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define SV_STIDLE	0
 #define SV_STCPEND	1
 #define SV_STCONN	2
-#define SV_STHEADERS	3
-#define SV_STDATA	4
-#define SV_STSHUTR	5
-#define SV_STSHUTW	6
 #define SV_STCLOSE	7
 
 /* result of an I/O event */
@@ -375,13 +352,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define SRV_STATUS_FULL     3   /* the/all server(s) are saturated */
 #define SRV_STATUS_QUEUED   4   /* the/all server(s) are saturated but the connection was queued */
 
-/* what to do when a header matches a regex */
-#define ACT_ALLOW	0	/* allow the request */
-#define ACT_REPLACE	1	/* replace the matching header */
-#define ACT_REMOVE	2	/* remove the matching header */
-#define ACT_DENY	3	/* deny the request */
-#define ACT_PASS	4	/* pass this header without allowing or denying the request */
-
 /* configuration sections */
 #define CFG_NONE	0
 #define CFG_GLOBAL	1
@@ -396,13 +366,6 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define LIST_HEAD(a)	((void *)(&(a)))
 
 /*********************************************************************/
-
-struct hdr_exp {
-    struct hdr_exp *next;
-    regex_t *preg;			/* expression to look for */
-    int action;				/* ACT_ALLOW, ACT_REPLACE, ACT_REMOVE, ACT_DENY */
-    char *replace;			/* expression to set instead */
-};
 
 struct buffer {
     unsigned int l;			/* data length */
@@ -488,10 +451,6 @@ struct proxy {
     int options;			/* PR_O_* ... */
     struct proxy *next;
     struct timeval stop_time;		/* date to stop listening, when stopping != 0 */
-    int nb_reqadd, nb_rspadd;
-    struct hdr_exp *req_exp;		/* regular expressions for request headers */
-    struct hdr_exp *rsp_exp;		/* regular expressions for response headers */
-    char *req_add[MAX_NEWHDR], *rsp_add[MAX_NEWHDR]; /* headers to be added */
     int grace;				/* grace time after stop request */
     struct {
 	char *msg400;			/* message for error 400 */
@@ -593,7 +552,6 @@ static int oldpids_sig; /* use USR1 or TERM */
 static fd_set *PrevReadEvent = NULL, *PrevWriteEvent = NULL;
 #endif
 
-static regmatch_t pmatch[MAX_MATCH];  /* rm_so, rm_eo for regular expressions */
 /* this is used to drain data, and as a temporary buffer for sprintf()... */
 static char trash[BUFSIZE];
 static char common_response[RESPSIZE];
@@ -1998,46 +1956,6 @@ int buffer_replace2(struct buffer *b, char *pos, char *end, char *str, int len) 
 }
 
 
-int exp_replace(char *dst, char *src, char *str, regmatch_t *matches) {
-    char *old_dst = dst;
-
-    while (*str) {
-	if (*str == '\\') {
-	    str++;
-	    if (isdigit((int)*str)) {
-		int len, num;
-
-		num = *str - '0';
-		str++;
-
-		if (matches[num].rm_eo > -1 && matches[num].rm_so > -1) {
-		    len = matches[num].rm_eo - matches[num].rm_so;
-		    memcpy(dst, src + matches[num].rm_so, len);
-		    dst += len;
-		}
-		
-	    }
-	    else if (*str == 'x') {
-		unsigned char hex1, hex2;
-		str++;
-
-		hex1 = toupper(*str++) - '0';
-		hex2 = toupper(*str++) - '0';
-
-		if (hex1 > 9) hex1 -= 'A' - '9' - 1;
-		if (hex2 > 9) hex2 -= 'A' - '9' - 1;
-		*dst++ = (hex1<<4) + hex2;
-	    }
-	    else
-		*dst++ = *str++;
-	}
-	else
-	    *dst++ = *str++;
-    }
-    *dst = 0;
-    return dst - old_dst;
-}
-
 static int ishex(char s)
 {
     return (s >= '0' && s <= '9') || (s >= 'A' && s <= 'F') || (s >= 'a' && s <= 'f');
@@ -2101,8 +2019,6 @@ int process_cli(struct session *t) {
 	/* now parse the partial (or complete) headers */
 	while (req->lr < req->r) { /* this loop only sees one header at each iteration */
 	    char *ptr;
-	    int delete_header;
-	
 	    ptr = req->lr;
 
 	    /* look for the end of the current header */
@@ -2110,8 +2026,6 @@ int process_cli(struct session *t) {
 		ptr++;
 	    
 	    if (ptr == req->h) { /* empty line, end of headers */
-		int line, len;
-
 		/*
 		 * first, let's check that it's not a leading empty line, in
 		 * which case we'll ignore and remove it (according to RFC2616).
@@ -2137,49 +2051,10 @@ int process_cli(struct session *t) {
 		    continue;
 		}
 
-		/* we can only get here after an end of headers */
-		/* we'll have something else to do here : add new headers ... */
-
-		if (t->flags & SN_CLDENY) {
-		    /* no need to go further */
-		    client_retnclose(t, t->proxy->errmsg.len403, t->proxy->errmsg.msg403);
-		    if (!(t->flags & SN_ERR_MASK))
-			t->flags |= SN_ERR_PRXCOND;
-		    if (!(t->flags & SN_FINST_MASK))
-			t->flags |= SN_FINST_R;
-		    return 1;
-		}
-
-		for (line = 0; line < t->proxy->nb_reqadd; line++) {
-		    len = sprintf(trash, "%s\r\n", t->proxy->req_add[line]);
-		    buffer_replace2(req, req->h, req->h, trash, len);
-		}
-
-		if (!memcmp(req->data, "POST ", 5)) {
-		    /* this is a POST request, which is not cacheable by default */
-		    t->flags |= SN_POST;
-		}
-		    
 		t->cli_state = CL_STDATA;
 		req->rlim = req->data + BUFSIZE; /* no more rewrite needed */
 
 		t->logs.t_request = tv_diff(&t->logs.tv_accept, &now);
-		/* FIXME: we'll set the client in a wait state while we try to
-		 * connect to the server. Is this really needed ? wouldn't it be
-		 * better to release the maximum of system buffers instead ?
-		 * The solution is to enable the FD but set its time-out to
-		 * eternity as long as the server-side does not enable data xfer.
-		 * CL_STDATA also has to take care of this, which is done below.
-		 */
-		//FD_CLR(t->cli_fd, StaticReadEvent);
-		//tv_eternity(&t->crexpire);
-
-		/* FIXME: if we break here (as up to 1.1.23), having the client
-		 * shutdown its connection can lead to an abort further.
-		 * it's better to either return 1 or even jump directly to the
-		 * data state which will save one schedule.
-		 */
-		//break;
 
 		if (!t->proxy->clitimeout)
 		    /* If the client has no timeout, or if the server is not ready yet,
@@ -2211,8 +2086,6 @@ int process_cli(struct session *t) {
 	    else
 		req->lr = ptr + 2; /* \r\n or \n\r */
 
-	    delete_header = 0;
-
 	    if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 		int len, max;
 		len = sprintf(trash, "%08x:%s.clihdr[%04x:%04x]: ", t->uniq_id, t->proxy->id, (unsigned  short)t->cli_fd, (unsigned short)-1);
@@ -2223,58 +2096,7 @@ int process_cli(struct session *t) {
 		write(1, trash, len);
 	    }
 
-
-	    /* remove "connection: " if needed */
-	    if (!delete_header && (t->proxy->options & PR_O_HTTP_CLOSE)
-		&& (strncasecmp(req->h, "Connection: ", 12) == 0)) {
-		delete_header = 1;
-	    }
-
-	    /* try headers regexps */
-	    if (!delete_header && t->proxy->req_exp != NULL
-		&& !(t->flags & SN_CLDENY)) {
-		struct hdr_exp *exp;
-		char term;
-		
-		term = *ptr;
-		*ptr = '\0';
-		exp = t->proxy->req_exp;
-		do {
-		    if (regexec(exp->preg, req->h, MAX_MATCH, pmatch, 0) == 0) {
-			switch (exp->action) {
-			case ACT_ALLOW:
-			    if (!(t->flags & SN_CLDENY))
-				t->flags |= SN_CLALLOW;
-			    break;
-			case ACT_REPLACE:
-			    if (!(t->flags & SN_CLDENY)) {
-				int len = exp_replace(trash, req->h, exp->replace, pmatch);
-				ptr += buffer_replace2(req, req->h, ptr, trash, len);
-			    }
-			    break;
-			case ACT_REMOVE:
-			    if (!(t->flags & SN_CLDENY))
-				delete_header = 1;
-			    break;
-			case ACT_DENY:
-			    if (!(t->flags & SN_CLALLOW))
-				t->flags |= SN_CLDENY;
-			    break;
-			case ACT_PASS: /* we simply don't deny this one */
-			    break;
-			}
-			break;
-		    }
-		} while ((exp = exp->next) != NULL);
-		*ptr = term; /* restore the string terminator */
-	    }
-
-	    /* let's look if we have to delete this header */
-	    if (delete_header && !(t->flags & SN_CLDENY)) {
-		buffer_replace2(req, req->h, req->lr, NULL, 0);
-	    }
 	    /* WARNING: ptr is not valid anymore, since the header may have been deleted or truncated ! */
-
 	    req->h = req->lr;
 	} /* while (req->lr < req->r) */
 
@@ -2348,7 +2170,7 @@ int process_cli(struct session *t) {
 	    return 1;
 	}
 	/* last read, or end of server write */
-	else if (t->res_cr == RES_NULL || s == SV_STSHUTW || s == SV_STCLOSE) {
+	else if (t->res_cr == RES_NULL || s == SV_STCLOSE) {
 	    FD_CLR(t->cli_fd, StaticReadEvent);
 	    tv_eternity(&t->crexpire);
 	    shutdown(t->cli_fd, SHUT_RD);
@@ -2356,7 +2178,7 @@ int process_cli(struct session *t) {
 	    return 1;
 	}	
 	/* last server read and buffer empty */
-	else if ((s == SV_STSHUTR || s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
+	else if ((s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
 	    FD_CLR(t->cli_fd, StaticWriteEvent);
 	    tv_eternity(&t->cwexpire);
 	    shutdown(t->cli_fd, SHUT_WR);
@@ -2425,7 +2247,7 @@ int process_cli(struct session *t) {
 	}
 
 	if ((rep->l == 0 && t->to_write == 0) ||
-	    ((s < SV_STDATA) /* FIXME: this may be optimized && (rep->w == rep->h)*/)) {
+	    ((s < SV_STCLOSE) /* FIXME: this may be optimized && (rep->w == rep->h)*/)) {
 	    if (FD_ISSET(t->cli_fd, StaticWriteEvent)) {
 		FD_CLR(t->cli_fd, StaticWriteEvent); /* stop writing */
 		tv_eternity(&t->cwexpire);
@@ -2457,7 +2279,7 @@ int process_cli(struct session *t) {
 		t->flags |= SN_FINST_D;
 	    return 1;
 	}
-	else if ((s == SV_STSHUTR || s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
+	else if ((s == SV_STCLOSE) && (rep->l == 0 && t->to_write == 0)) {
 	    tv_eternity(&t->cwexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
@@ -2473,8 +2295,7 @@ int process_cli(struct session *t) {
 		t->flags |= SN_FINST_D;
 	    return 1;
 	}
-	else if ((rep->l == 0 && t->to_write == 0) ||
-		 ((s == SV_STHEADERS) /* FIXME: this may be optimized && (rep->w == rep->h)*/)) {
+	else if ((rep->l == 0 && t->to_write == 0)) {
 	    if (FD_ISSET(t->cli_fd, StaticWriteEvent)) {
 		FD_CLR(t->cli_fd, StaticWriteEvent); /* stop writing */
 		tv_eternity(&t->cwexpire);
@@ -2506,7 +2327,7 @@ int process_cli(struct session *t) {
 		t->flags |= SN_FINST_D;
 	    return 1;
 	}
-	else if (t->res_cr == RES_NULL || s == SV_STSHUTW || s == SV_STCLOSE) {
+	else if (t->res_cr == RES_NULL || s == SV_STCLOSE) {
 	    tv_eternity(&t->crexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
@@ -3211,31 +3032,6 @@ void sig_dump_state(int sig) {
     signal(sig, sig_dump_state);
 }
 
-/* returns the pointer to an error in the replacement string, or NULL if OK */
-char *chain_regex(struct hdr_exp **head, regex_t *preg, int action, char *replace) {
-    struct hdr_exp *exp;
-
-    if (replace != NULL) {
-	char *err;
-	err = check_replace_string(replace);
-	if (err)
-	    return err;
-    }
-
-    while (*head != NULL)
-	head = &(*head)->next;
-
-    exp = calloc(1, sizeof(struct hdr_exp));
-
-    exp->preg = preg;
-    exp->replace = replace;
-    exp->action = action;
-    *head = exp;
-
-    return NULL;
-}
-
-
 /*
  * parse a line in a <global> section. Returns 0 if OK, -1 if error.
  */
@@ -3364,7 +3160,6 @@ void init_default_instance() {
 int cfg_parse_listen(char *file, int linenum, char **args) {
     static struct proxy *curproxy = NULL;
     struct server *newsrv = NULL;
-    char *err;
 
     if (!strcmp(args[0], "listen")) {  /* new proxy */
 	if (!*args[1]) {
@@ -3595,488 +3390,6 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 		      file, linenum, newsrv->id);
 		return -1;
 	    }
-	}
-    }
-    else if (!strcmp(args[0], "cliexp") || !strcmp(args[0], "reqrep")) {  /* replace request header from a regex */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0 || *(args[2]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> and <replace> as arguments.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->req_exp, preg, ACT_REPLACE, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "reqdel")) {  /* delete request header from a regex */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_REMOVE, NULL);
-    }
-    else if (!strcmp(args[0], "reqdeny")) {  /* deny a request if a header matches this regex */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_DENY, NULL);
-    }
-    else if (!strcmp(args[0], "reqpass")) {  /* pass this header without allowing or denying the request */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_PASS, NULL);
-    }
-    else if (!strcmp(args[0], "reqallow")) {  /* allow a request if a header matches this regex */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_ALLOW, NULL);
-    }
-    else if (!strcmp(args[0], "reqirep")) {  /* replace request header from a regex, ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0 || *(args[2]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> and <replace> as arguments.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->req_exp, preg, ACT_REPLACE, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "reqidel")) {  /* delete request header from a regex ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_REMOVE, NULL);
-    }
-    else if (!strcmp(args[0], "reqideny")) {  /* deny a request if a header matches this regex ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_DENY, NULL);
-    }
-    else if (!strcmp(args[0], "reqipass")) {  /* pass this header without allowing or denying the request */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_PASS, NULL);
-    }
-    else if (!strcmp(args[0], "reqiallow")) {  /* allow a request if a header matches this regex ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <regex> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	chain_regex(&curproxy->req_exp, preg, ACT_ALLOW, NULL);
-    }
-    else if (!strcmp(args[0], "reqadd")) {  /* add request header */
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	if (curproxy->nb_reqadd >= MAX_NEWHDR) {
-	    Alert("parsing [%s:%d] : too many '%s'. Continuing.\n", file, linenum, args[0]);
-	    return 0;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <header> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	curproxy->req_add[curproxy->nb_reqadd++] = strdup(args[1]);
-    }
-    else if (!strcmp(args[0], "srvexp") || !strcmp(args[0], "rsprep")) {  /* replace response header from a regex */
-	regex_t *preg;
-	
-	if (*(args[1]) == 0 || *(args[2]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> and <replace> as arguments.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-	
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->rsp_exp, preg, ACT_REPLACE, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "rspdel")) {  /* delete response header from a regex */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->rsp_exp, preg, ACT_REMOVE, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "rspdeny")) {  /* block response header from a regex */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->rsp_exp, preg, ACT_DENY, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "rspirep")) {  /* replace response header from a regex ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	if (*(args[1]) == 0 || *(args[2]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> and <replace> as arguments.\n",
-		  file, linenum, args[0]);
-	    return -1;
-	}
-
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	    
-	err = chain_regex(&curproxy->rsp_exp, preg, ACT_REPLACE, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "rspidel")) {  /* delete response header from a regex ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->rsp_exp, preg, ACT_REMOVE, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "rspideny")) {  /* block response header from a regex ignoring case */
-	regex_t *preg;
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <search> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	preg = calloc(1, sizeof(regex_t));
-	if (regcomp(preg, args[1], REG_EXTENDED | REG_ICASE) != 0) {
-	    Alert("parsing [%s:%d] : bad regular expression '%s'.\n", file, linenum, args[1]);
-	    return -1;
-	}
-	
-	err = chain_regex(&curproxy->rsp_exp, preg, ACT_DENY, strdup(args[2]));
-	if (err) {
-	    Alert("parsing [%s:%d] : invalid character or unterminated sequence in replacement string near '%c'.\n",
-		  file, linenum, *err);
-	    return -1;
-	}
-    }
-    else if (!strcmp(args[0], "rspadd")) {  /* add response header */
-	if (curproxy == &defproxy) {
-	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	    return -1;
-	}
-
-	if (curproxy->nb_rspadd >= MAX_NEWHDR) {
-	    Alert("parsing [%s:%d] : too many '%s'. Continuing.\n", file, linenum, args[0]);
-	    return 0;
-	}
-	
-	if (*(args[1]) == 0) {
-	    Alert("parsing [%s:%d] : '%s' expects <header> as an argument.\n", file, linenum, args[0]);
-	    return -1;
-	}
-	
-	curproxy->rsp_add[curproxy->nb_rspadd++] = strdup(args[1]);
-    }
-    else if (!strcmp(args[0], "errorloc") ||
-	     !strcmp(args[0], "errorloc302") ||
-	     !strcmp(args[0], "errorloc303")) { /* error location */
-	int errnum, errlen;
-	char *err;
-
-	// if (curproxy == &defproxy) {
-	//     Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
-	//     return -1;
-	// }
-
-	if (*(args[2]) == 0) {
-	    Alert("parsing [%s:%d] : <errorloc> expects <error> and <url> as arguments.\n", file, linenum);
-	    return -1;
-	}
-
-	errnum = atol(args[1]);
-	if (!strcmp(args[0], "errorloc303")) {
-	    err = malloc(strlen(HTTP_303) + strlen(args[2]) + 5);
-	    errlen = sprintf(err, "%s%s\r\n\r\n", HTTP_303, args[2]);
-	} else {
-	    err = malloc(strlen(HTTP_302) + strlen(args[2]) + 5);
-	    errlen = sprintf(err, "%s%s\r\n\r\n", HTTP_302, args[2]);
-	}
-
-	if (errnum == 400) {
-	    if (curproxy->errmsg.msg400) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg400);
-	    }
-	    curproxy->errmsg.msg400 = err;
-	    curproxy->errmsg.len400 = errlen;
-	}
-	else if (errnum == 403) {
-	    if (curproxy->errmsg.msg403) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg403);
-	    }
-	    curproxy->errmsg.msg403 = err;
-	    curproxy->errmsg.len403 = errlen;
-	}
-	else if (errnum == 408) {
-	    if (curproxy->errmsg.msg408) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg408);
-	    }
-	    curproxy->errmsg.msg408 = err;
-	    curproxy->errmsg.len408 = errlen;
-	}
-	else if (errnum == 500) {
-	    if (curproxy->errmsg.msg500) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg500);
-	    }
-	    curproxy->errmsg.msg500 = err;
-	    curproxy->errmsg.len500 = errlen;
-	}
-	else if (errnum == 502) {
-	    if (curproxy->errmsg.msg502) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg502);
-	    }
-	    curproxy->errmsg.msg502 = err;
-	    curproxy->errmsg.len502 = errlen;
-	}
-	else if (errnum == 503) {
-	    if (curproxy->errmsg.msg503) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg503);
-	    }
-	    curproxy->errmsg.msg503 = err;
-	    curproxy->errmsg.len503 = errlen;
-	}
-	else if (errnum == 504) {
-	    if (curproxy->errmsg.msg504) {
-		//Warning("parsing [%s:%d] : error %d already defined.\n", file, linenum, errnum);
-		free(curproxy->errmsg.msg504);
-	    }
-	    curproxy->errmsg.msg504 = err;
-	    curproxy->errmsg.len504 = errlen;
-	}
-	else {
-	    Warning("parsing [%s:%d] : error %d relocation will be ignored.\n", file, linenum, errnum);
-	    free(err);
 	}
     }
     else {
