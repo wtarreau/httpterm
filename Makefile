@@ -22,8 +22,6 @@ CPU = generic
 CC = gcc
 LD = gcc
 
-REGEX=libc
-
 # This is for standard Linux 2.6 with epoll()
 COPTS.linux26 = -DENABLE_POLL -DENABLE_EPOLL
 LIBS.linux26 =
@@ -53,7 +51,7 @@ COPTS.i586 = -O2 -march=i586
 COPTS.i686 = -O2 -march=i686
 COPTS.ultrasparc = -O6 -mcpu=v9 -mtune=ultrasparc
 
-# options for standard regex library
+# options for standard library
 COPTS.libc=
 LIBS.libc=
 
@@ -81,11 +79,10 @@ DEFINE = -DSTATTIME=0
 
 # global options
 TARGET_OPTS=$(COPTS.$(TARGET))
-REGEX_OPTS=$(COPTS.$(REGEX))
 CPU_OPTS=$(COPTS.$(CPU))
 
-COPTS=-I. $(ADDINC) $(CPU_OPTS) $(TARGET_OPTS) $(REGEX_OPTS) $(SMALL_OPTS) $(DEFINE)
-LIBS=$(LIBS.$(TARGET)) $(LIBS.$(REGEX)) $(ADDLIB)
+COPTS=-I. $(ADDINC) $(CPU_OPTS) $(TARGET_OPTS) $(SMALL_OPTS) $(DEFINE)
+LIBS=$(LIBS.$(TARGET)) $(LIBS.libc) $(ADDLIB)
 
 CFLAGS = -Wall $(COPTS) $(DEBUG)
 LDFLAGS = -g
