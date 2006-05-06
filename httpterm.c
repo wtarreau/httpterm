@@ -325,9 +325,8 @@ int strlcpy2(char *dst, const char *src, int size) {
 
 /* different possible states for the server side */
 #define SV_STIDLE	0
-#define SV_STCPEND	1
-#define SV_STCONN	2
-#define SV_STCLOSE	7
+#define SV_STCONN	1
+#define SV_STCLOSE	2
 
 /* result of an I/O event */
 #define	RES_SILENT	0	/* didn't happen */
@@ -1959,39 +1958,6 @@ static int ishex(char s)
 {
     return (s >= '0' && s <= '9') || (s >= 'A' && s <= 'F') || (s >= 'a' && s <= 'f');
 }
-
-/* returns NULL if the replacement string <str> is valid, or the pointer to the first error */
-char *check_replace_string(char *str)
-{
-    char *err = NULL;
-    while (*str) {
-	if (*str == '\\') {
-	    err = str; /* in case of a backslash, we return the pointer to it */
-	    str++;
-	    if (!*str)
-		return err;
-	    else if (isdigit((int)*str))
-		err = NULL;
-	    else if (*str == 'x') {
-		str++;
-		if (!ishex(*str))
-		    return err;
-		str++;
-		if (!ishex(*str))
-		    return err;
-		err = NULL;
-	    }
-	    else {
-		Warning("'\\%c' : deprecated use of a backslash before something not '\\','x' or a digit.\n", *str);
-		err = NULL;
-	    }
-	}
-	str++;
-    }
-    return err;
-}
-
-
 
 /*
  * manages the client FSM and its socket. BTW, it also tries to handle the
