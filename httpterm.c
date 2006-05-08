@@ -82,11 +82,6 @@
 #define HTTPTERM_DATE	"2006/05/06"
 #endif
 
-/* this is for libc5 for example */
-#ifndef TCP_NODELAY
-#define TCP_NODELAY	1
-#endif
-
 #ifndef SHUT_RD
 #define SHUT_RD		0
 #endif
@@ -1706,9 +1701,7 @@ int event_accept(int fd) {
 	    return 0;
 	}
 
-	if ((fcntl(cfd, F_SETFL, O_NONBLOCK) == -1) ||
-	    (setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY,
-			(char *) &one, sizeof(one)) == -1)) {
+	if (fcntl(cfd, F_SETFL, O_NONBLOCK) == -1) {
 	    Alert("accept(): cannot set the socket in non blocking mode. Giving up\n");
 	    close(cfd);
 	    pool_free(task, t);
@@ -3596,9 +3589,7 @@ int start_proxies(int verbose) {
 		break;
 	    }
 
-	    if ((fcntl(fd, F_SETFL, O_NONBLOCK) == -1) ||
-		(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
-			    (char *) &one, sizeof(one)) == -1)) {
+	    if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
 		Alert("cannot make socket non-blocking for proxy %s. Aborting.\n",
 		      curproxy->id);
 		close(fd);
