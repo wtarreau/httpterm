@@ -380,6 +380,7 @@ char *ultoa(unsigned long n) {
 #define PR_O_BALANCE_SH	0x00400000	/* balance on source IP hash */
 #define PR_O_BALANCE	(PR_O_BALANCE_RR | PR_O_BALANCE_SH)
 #define PR_O_ABRT_CLOSE	0x00800000	/* immediately abort request when client closes */
+#define PR_O_SSL3_CHK	0x01000000	/* use SSLv3 CLIENT_HELLO packets for server health */
 
 /* various session flags, bits values 0x01 to 0x20 (shift 0) */
 #define SN_DIRECT	0x00000001	/* connection made on the server matching the client cookie */
@@ -719,8 +720,8 @@ struct proxy {
     void *req_cap_pool, *rsp_cap_pool;	/* pools of pre-allocated char ** used to build the sessions */
     char *req_add[MAX_NEWHDR], *rsp_add[MAX_NEWHDR]; /* headers to be added */
     int grace;				/* grace time after stop request */
-    char *check_req;			/* HTTP request to use if PR_O_HTTP_CHK is set, else NULL */
-    int check_len;			/* Length of the HTTP request */
+    char *check_req;			/* HTTP or SSL request to use for PR_O_HTTP_CHK|PR_O_SSL3_CHK */
+    int check_len;			/* Length of the HTTP or SSL3 request */
     struct {
 	char *msg400;			/* message for error 400 */
 	int len400;			/* message length for error 400 */
@@ -958,6 +959,36 @@ const char *HTTP_504 =
 	"Content-Type: text/html\r\n"
 	"\r\n"
 	"<html><body><h1>504 Gateway Time-out</h1>\nThe server didn't respond in time.\n</body></html>\n";
+
+/* This is the SSLv3 CLIENT HELLO packet used in conjunction with the
+ * ssl-hello-chk option to ensure that the remote server speaks SSL.
+ *
+ * Check RFC 2246 (TLSv1.0) sections A.3 and A.4 for details.
+ */
+const char sslv3_client_hello_pkt[] = {
+    "\x16"                /* ContentType         : 0x16 = Hanshake           */
+    "\x03\x00"            /* ProtocolVersion     : 0x0300 = SSLv3            */
+    "\x00\x79"            /* ContentLength       : 0x79 bytes after this one */
+    "\x01"                /* HanshakeType        : 0x01 = CLIENT HELLO       */
+    "\x00\x00\x75"        /* HandshakeLength     : 0x75 bytes after this one */
+    "\x03\x00"            /* Hello Version       : 0x0300 = v3               */
+    "\x00\x00\x00\x00"    /* Unix GMT Time (s)   : filled with <now> (@0x0B) */
+    "HAPROXYSSLCHK\nHAPROXYSSLCHK\n" /* Random   : must be exactly 28 bytes  */
+    "\x00"                /* Session ID length   : empty (no session ID)     */
+    "\x00\x4E"            /* Cipher Suite Length : 78 bytes after this one   */
+    "\x00\x01" "\x00\x02" "\x00\x03" "\x00\x04" /* 39 most common ciphers :  */
+    "\x00\x05" "\x00\x06" "\x00\x07" "\x00\x08" /* 0x01...0x1B, 0x2F...0x3A  */
+    "\x00\x09" "\x00\x0A" "\x00\x0B" "\x00\x0C" /* This covers RSA/DH,       */
+    "\x00\x0D" "\x00\x0E" "\x00\x0F" "\x00\x10" /* various bit lengths,      */
+    "\x00\x11" "\x00\x12" "\x00\x13" "\x00\x14" /* SHA1/MD5, DES/3DES/AES... */
+    "\x00\x15" "\x00\x16" "\x00\x17" "\x00\x18"
+    "\x00\x19" "\x00\x1A" "\x00\x1B" "\x00\x2F"
+    "\x00\x30" "\x00\x31" "\x00\x32" "\x00\x33"
+    "\x00\x34" "\x00\x35" "\x00\x36" "\x00\x37"
+    "\x00\x38" "\x00\x39" "\x00\x3A"
+    "\x01"                /* Compression Length  : 0x01 = 1 byte for types   */
+    "\x00"                /* Compression Type    : 0x00 = NULL compression   */
+};
 
 /*********************************************************************/
 /*  statistics  ******************************************************/
@@ -3949,11 +3980,19 @@ int event_srv_chk_w(int fd) {
     }
     else if (s->result != -1) {
 	/* we don't want to mark 'UP' a server on which we detected an error earlier */
-	if (s->proxy->options & PR_O_HTTP_CHK) {
+	if ((s->proxy->options & PR_O_HTTP_CHK) ||
+	    (s->proxy->options & PR_O_SSL3_CHK)) {
 	    int ret;
-	    /* we want to check if this host replies to "OPTIONS / HTTP/1.0"
+	    /* we want to check if this host replies to HTTP or SSLv3 requests
 	     * so we'll send the request, and won't wake the checker up now.
 	     */
+
+	    if (s->proxy->options & PR_O_SSL3_CHK) {
+		/* SSL requires that we put Unix time in the request */
+		int gmt_time = htonl(now.tv_sec);
+		memcpy(s->proxy->check_req + 11, &gmt_time, 4);
+	    }
+
 #ifndef MSG_NOSIGNAL
 	    ret = send(fd, s->proxy->check_req, s->proxy->check_len, MSG_DONTWAIT);
 #else
@@ -3981,9 +4020,12 @@ int event_srv_chk_w(int fd) {
 
 
 /*
- * This function is used only for server health-checks. It handles
- * the server's reply to an HTTP request. It returns 1 if the server replies
- * 2xx or 3xx (valid responses), or -1 in other cases.
+ * This function is used only for server health-checks. It handles the server's
+ * reply to an HTTP request or SSL HELLO. It returns 1 in s->result if the
+ * server replies HTTP 2xx or 3xx (valid responses), or if it returns at least
+ * 5 bytes in response to SSL HELLO. The principle is that this is enough to
+ * distinguish between an SSL server and a pure TCP relay. All other cases will
+ * return -1. The function returns 0.
  */
 int event_srv_chk_r(int fd) {
     char reply[64];
@@ -4006,10 +4048,12 @@ int event_srv_chk_r(int fd) {
 	     */
 	    len = recv(fd, reply, sizeof(reply), MSG_NOSIGNAL);
 #endif
-
-	    if ((len >= sizeof("HTTP/1.0 000")) &&
+	    if (((s->proxy->options & PR_O_HTTP_CHK) &&
+		(len >= sizeof("HTTP/1.0 000")) &&
 		!memcmp(reply, "HTTP/1.", 7) &&
 		(reply[9] == '2' || reply[9] == '3')) /* 2xx or 3xx */
+		|| ((s->proxy->options & PR_O_SSL3_CHK) && (len >= 5) &&
+		    (reply[0] == 0x15 || reply[0] == 0x16))) /* alert or handshake */
 		    result = 1;
     }
 
@@ -8400,6 +8444,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 		free(curproxy->check_req);
 	    }
 	    curproxy->options |= PR_O_HTTP_CHK;
+	    curproxy->options &= ~PR_O_SSL3_CHK;
 	    if (!*args[2]) { /* no argument */
 		curproxy->check_req = strdup(DEF_CHECK_REQ); /* default request */
 		curproxy->check_len = strlen(DEF_CHECK_REQ);
@@ -8419,6 +8464,14 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 		curproxy->check_len = snprintf(curproxy->check_req, reqlen,
 			 "%s %s %s\r\n\r\n", args[2], args[3], *args[4]?args[4]:"HTTP/1.0");
 	    }
+	}
+	else if (!strcmp(args[1], "ssl-hello-chk")) {
+	    /* use SSLv3 CLIENT HELLO to check servers' health */
+	    if (curproxy->check_req != NULL) {
+		free(curproxy->check_req);
+	    }
+	    curproxy->options &= ~PR_O_HTTP_CHK;
+	    curproxy->options |= PR_O_SSL3_CHK;
 	}
 	else if (!strcmp(args[1], "persist")) {
 	    /* persist on using the server specified by the cookie, even when it's down */
@@ -9395,6 +9448,12 @@ int readcfgfile(char *file) {
 			"   | with such a configuration. To fix this, please ensure that all following\n"
 			"   | values are set to a non-zero value: clitimeout, contimeout, srvtimeout.\n",
 			file, curproxy->id);
+	}
+
+	if (curproxy->options & PR_O_SSL3_CHK) {
+	    curproxy->check_len = sizeof(sslv3_client_hello_pkt);
+	    curproxy->check_req = (char *)malloc(sizeof(sslv3_client_hello_pkt));
+	    memcpy(curproxy->check_req, sslv3_client_hello_pkt, sizeof(sslv3_client_hello_pkt));
 	}
 
 	/* first, we will invert the servers list order */
