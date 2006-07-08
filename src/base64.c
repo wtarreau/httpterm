@@ -1,6 +1,6 @@
 /*
  * Ascii to Base64 conversion as described in RFC1421.
- * Copyright 2006 Willy Tarreau <willy@w.ods.org>
+ * Copyright 2006 Willy Tarreau <w@1wt.eu>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
