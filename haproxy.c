@@ -689,6 +689,8 @@ struct proxy {
     int  capture_namelen;		/* length of the cookie name to match */
     int  capture_len;			/* length of the string to be captured */
     struct uri_auth *uri_auth;		/* if non-NULL, the (list of) per-URI authentications */
+    char *monitor_uri;			/* a special URI to which we respond with HTTP/200 OK */
+    int monitor_uri_len;		/* length of the string above. 0 if unused */
     int clitimeout;			/* client I/O timeout (in milliseconds) */
     int srvtimeout;			/* server I/O timeout (in milliseconds) */
     int contimeout;			/* connect timeout (in milliseconds) */
@@ -880,6 +882,14 @@ const char sess_set_cookie[8] = "N1I3PD5R";	/* No set-cookie, unknown, Set-Cooki
 
 #define MAX_HOSTNAME_LEN	32
 static char hostname[MAX_HOSTNAME_LEN] = "";
+
+const char *HTTP_200 =
+	"HTTP/1.0 200 OK\r\n"
+	"Cache-Control: no-cache\r\n"
+	"Connection: close\r\n"
+	"Content-Type: text/html\r\n"
+	"\r\n"
+	"<html><body><h1>200 OK</h1>\nHAProxy: service ready.\n</body></html>\n";
 
 const char *HTTP_302 =
 	"HTTP/1.0 302 Found\r\n"
@@ -4298,6 +4308,38 @@ int process_cli(struct session *t) {
 		 * whatever we want.
 		 */
 
+
+		/* check if the URI matches the monitor_uri. To speed-up the
+		 * test, we include the leading and trailing spaces in the
+		 * comparison.
+		 */
+		if ((t->proxy->monitor_uri_len != 0) &&
+		    (t->req_line.len >= t->proxy->monitor_uri_len)) {
+		    char *p = t->req_line.str;
+		    int idx = 0;
+
+		    /* skip the method so that we accept any method */
+		    while (idx < t->req_line.len && p[idx] != ' ')
+			idx++;
+		    p += idx;
+
+		    if (t->req_line.len - idx >= t->proxy->monitor_uri_len &&
+			!memcmp(p, t->proxy->monitor_uri, t->proxy->monitor_uri_len)) {
+			/*
+			 * We have found the monitor URI
+			 */
+			t->flags |= SN_MONITOR;
+			t->logs.status = 200;
+			client_retnclose(t, strlen(HTTP_200), HTTP_200);
+			if (!(t->flags & SN_ERR_MASK))
+			    t->flags |= SN_ERR_PRXCOND;
+			if (!(t->flags & SN_FINST_MASK))
+			    t->flags |= SN_FINST_R;
+			return 1;
+		    }
+		}
+
+
 		if (t->proxy->uri_auth != NULL
 		    && t->req_line.len >= t->proxy->uri_auth->uri_len + 4) {   /* +4 for "GET /" */
 		    if (!memcmp(t->req_line.str + 4,
@@ -6604,7 +6646,9 @@ int process_session(struct task *t) {
 	s->logs.bytes = s->rep->total;
 
     /* let's do a final log if we need it */
-    if (s->logs.logwait && (!(s->proxy->options & PR_O_NULLNOLOG) || s->req->total))
+    if (s->logs.logwait && 
+	!(s->flags & SN_MONITOR) &&
+	(!(s->proxy->options & PR_O_NULLNOLOG) || s->req->total))
 	sess_log(s);
 
     /* the task MUST not be in the run queue anymore */
@@ -8047,6 +8091,11 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	curproxy->source_addr = defproxy.source_addr;
 	curproxy->mon_net = defproxy.mon_net;
 	curproxy->mon_mask = defproxy.mon_mask;
+
+	if (defproxy.monitor_uri)
+	    curproxy->monitor_uri = strdup(defproxy.monitor_uri);
+	curproxy->monitor_uri_len = defproxy.monitor_uri_len;
+
 	return 0;
     }
     else if (!strcmp(args[0], "defaults")) {  /* use this one to assign default values */
@@ -8061,6 +8110,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	if (defproxy.errmsg.msg502) free(defproxy.errmsg.msg502);
 	if (defproxy.errmsg.msg503) free(defproxy.errmsg.msg503);
 	if (defproxy.errmsg.msg504) free(defproxy.errmsg.msg504);
+	if (defproxy.monitor_uri)   free(defproxy.monitor_uri);
 	/* we cannot free uri_auth because it might already be used */
 	init_default_instance();
 	curproxy = &defproxy;
@@ -8096,6 +8146,24 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 	/* flush useless bits */
 	curproxy->mon_net.s_addr &= curproxy->mon_mask.s_addr;
+	return 0;
+    }
+    else if (!strcmp(args[0], "monitor-uri")) {  /* set the URI to intercept */
+	if (!*args[1]) {
+	    Alert("parsing [%s:%d] : '%s' expects an URI.\n",
+		  file, linenum, args[0]);
+	    return -1;
+	}
+
+	if (curproxy->monitor_uri != NULL)
+	    free(curproxy->monitor_uri);
+
+	curproxy->monitor_uri_len = strlen(args[1]) + 2; /* include leading and trailing spaces */
+	curproxy->monitor_uri = (char *)calloc(1, curproxy->monitor_uri_len + 1);
+	memcpy(curproxy->monitor_uri + 1, args[1], curproxy->monitor_uri_len - 2);
+	curproxy->monitor_uri[curproxy->monitor_uri_len-1] = curproxy->monitor_uri[0] = ' ';
+	curproxy->monitor_uri[curproxy->monitor_uri_len] = '\0';
+
 	return 0;
     }
     else if (!strcmp(args[0], "mode")) {  /* sets the proxy mode */
@@ -9430,6 +9498,10 @@ int readcfgfile(char *file) {
 	    }
 	    if (curproxy->req_exp != NULL) {
 		Warning("parsing %s : client regular expressions will be ignored for listener %s.\n",
+			file, curproxy->id);
+	    }
+	    if (curproxy->monitor_uri != NULL) {
+		Warning("parsing %s : monitor-uri will be ignored for listener %s.\n",
 			file, curproxy->id);
 	    }
 	}
