@@ -91,11 +91,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HAPROXY_VERSION
-#define HAPROXY_VERSION "1.2.14"
+#define HAPROXY_VERSION "1.2.15"
 #endif
 
 #ifndef HAPROXY_DATE
-#define HAPROXY_DATE	"2006/05/21"
+#define HAPROXY_DATE	"2006/07/09"
 #endif
 
 /* this is for libc5 for example */

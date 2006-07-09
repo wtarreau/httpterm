@@ -1,6 +1,19 @@
 ChangeLog :
 ===========
 
+2006/07/09 : 1.2.15
+   - fixed a bug by which neither stats nor error messages could be returned if
+     'clitimeout' was missing.
+   - now, haproxy warns about missing timeout during startup to try to
+     eliminate all those buggy configurations.
+   - added "Content-Type: text/html" in responses wherever appropriate, as
+     suggested by Cameron Simpson.
+   - implemented "option ssl-hello-chk" to use SSLv3 CLIENT HELLO messages to
+     test server's health
+   - implemented "monitor-uri" so that haproxy can reply to a specific URI with
+     an "HTTP/1.0 200 OK" response. This is useful to validate multiple proxies
+     at once.
+
 2006/05/21 : 1.2.14
    - new HTML status report with the 'stats' keyword.
    - added the 'abortonclose' option to better resist traffic surges
