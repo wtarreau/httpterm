@@ -5398,9 +5398,6 @@ int srv_retryable_connect(struct session *t) {
 	}
 	/* ensure that we have enough retries left */
 	if (srv_count_retry_down(t, conn_err)) {
-	    /* let's try to offer this slot to anybody */
-	    if (may_dequeue_tasks(t->srv, t->proxy))
-		task_wakeup(&rq, t->srv->queue_mgt);
 	    return 1;
 	}
     } while (t->srv == NULL || t->conn_retries > 0 || !(t->proxy->options & PR_O_REDISP));
@@ -5596,6 +5593,30 @@ int process_srv(struct session *t) {
 	    /* ensure that we have enough retries left */
 	    if (srv_count_retry_down(t, conn_err))
 		return 1;
+
+	    if (t->srv && t->conn_retries == 0 && t->proxy->options & PR_O_REDISP) {
+		/* We're on our last chance, and the REDISP option was specified.
+		 * We will ignore cookie and force to balance or use the dispatcher.
+		 */
+		/* let's try to offer this slot to anybody */
+		if (may_dequeue_tasks(t->srv, t->proxy))
+		    task_wakeup(&rq, t->srv->queue_mgt);
+
+		if (t->srv)
+		    t->srv->failed_conns++;
+		t->proxy->failed_conns++;
+
+		t->flags &= ~(SN_DIRECT | SN_ASSIGNED | SN_ADDR_SET);
+		t->srv = NULL; /* it's left to the dispatcher to choose a server */
+		if ((t->flags & SN_CK_MASK) == SN_CK_VALID) {
+		    t->flags &= ~SN_CK_MASK;
+		    t->flags |= SN_CK_DOWN;
+		}
+
+		/* first, get a connection */
+		if (srv_redispatch_connect(t))
+		    return t->srv_state != SV_STIDLE;
+	    }
 
 	    do {
 		/* Now we will try to either reconnect to the same server or
