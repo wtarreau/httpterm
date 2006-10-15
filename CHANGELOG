@@ -1,6 +1,14 @@
 ChangeLog :
 ===========
 
+2006/10/15 : 1.2.16
+    - fix broken redispatch option in case the connection has already
+      been marked "in progress" (ie: nearly always).
+    - removed a few useless calls to gettimeofday() in log functions.
+    - lots of 'const char*' cleanups
+    - turn every FD_* into functions which are faster on recent CPUs
+    - fixed build on alpha-linux + epoll
+
 2006/07/09 : 1.2.15
    - fixed a bug by which neither stats nor error messages could be returned if
      'clitimeout' was missing.
