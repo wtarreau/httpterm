@@ -559,9 +559,9 @@ struct cap_hdr {
 
 struct hdr_exp {
     struct hdr_exp *next;
-    regex_t *preg;			/* expression to look for */
+    const regex_t *preg;		/* expression to look for */
     int action;				/* ACT_ALLOW, ACT_REPLACE, ACT_REMOVE, ACT_DENY */
-    char *replace;			/* expression to set instead */
+    const char *replace;		/* expression to set instead */
 };
 
 struct buffer {
@@ -1097,7 +1097,7 @@ void usage(char *name) {
  * Displays the message on stderr with the date and pid. Overrides the quiet
  * mode during startup.
  */
-void Alert(char *fmt, ...) {
+void Alert(const char *fmt, ...) {
     va_list argp;
     struct timeval tv;
     struct tm *tm;
@@ -1119,7 +1119,7 @@ void Alert(char *fmt, ...) {
 /*
  * Displays the message on stderr with the date and pid.
  */
-void Warning(char *fmt, ...) {
+void Warning(const char *fmt, ...) {
     va_list argp;
     struct timeval tv;
     struct tm *tm;
@@ -1140,7 +1140,7 @@ void Warning(char *fmt, ...) {
 /*
  * Displays the message on <out> only if quiet mode is not set.
  */
-void qfprintf(FILE *out, char *fmt, ...) {
+void qfprintf(FILE *out, const char *fmt, ...) {
     va_list argp;
 
     if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
@@ -1432,7 +1432,7 @@ char *encode_string(char *start, char *stop,
  * It also tries not to waste too much time computing the message header.
  * It doesn't care about errors nor does it report them.
  */
-void send_log(struct proxy *p, int level, char *message, ...) {
+void send_log(struct proxy *p, int level, const char *message, ...) {
     static int logfd = -1;	/* syslog UDP socket */
     static long tvsec = -1;	/* to force the string to be initialized */
     struct timeval tv;
@@ -1554,7 +1554,7 @@ static inline struct timeval *tv_now(struct timeval *tv) {
 /*
  * adds <ms> ms to <from>, set the result to <tv> and returns a pointer <tv>
  */
-static struct timeval *tv_delayfrom(struct timeval *tv, struct timeval *from, int ms) {
+static struct timeval *tv_delayfrom(struct timeval *tv, const struct timeval *from, int ms) {
     if (!tv || !from)
 	return NULL;
     tv->tv_usec = from->tv_usec + (ms%1000)*1000;
@@ -1570,7 +1570,7 @@ static struct timeval *tv_delayfrom(struct timeval *tv, struct timeval *from, in
  * compares <tv1> and <tv2> : returns 0 if equal, -1 if tv1 < tv2, 1 if tv1 > tv2
  * Must not be used when either argument is eternity. Use tv_cmp2() for that.
  */
-static inline int tv_cmp(struct timeval *tv1, struct timeval *tv2) {
+static inline int tv_cmp(const struct timeval *tv1, const struct timeval *tv2) {
     if (tv1->tv_sec < tv2->tv_sec)
 	return -1;
     else if (tv1->tv_sec > tv2->tv_sec)
@@ -1587,7 +1587,7 @@ static inline int tv_cmp(struct timeval *tv1, struct timeval *tv2) {
  * returns the absolute difference, in ms, between tv1 and tv2
  * Must not be used when either argument is eternity.
  */
-unsigned long tv_delta(struct timeval *tv1, struct timeval *tv2) {
+unsigned long tv_delta(const struct timeval *tv1, const struct timeval *tv2) {
     int cmp;
     unsigned long ret;
   
@@ -1596,7 +1596,7 @@ unsigned long tv_delta(struct timeval *tv1, struct timeval *tv2) {
     if (!cmp)
 	return 0; /* same dates, null diff */
     else if (cmp < 0) {
-	struct timeval *tmp = tv1;
+	const struct timeval *tmp = tv1;
 	tv1 = tv2;
 	tv2 = tmp;
     }
@@ -1612,7 +1612,7 @@ unsigned long tv_delta(struct timeval *tv1, struct timeval *tv2) {
  * returns the difference, in ms, between tv1 and tv2
  * Must not be used when either argument is eternity.
  */
-static inline unsigned long tv_diff(struct timeval *tv1, struct timeval *tv2) {
+static inline unsigned long tv_diff(const struct timeval *tv1, const struct timeval *tv2) {
     unsigned long ret;
   
     ret = (tv2->tv_sec - tv1->tv_sec) * 1000;
@@ -1627,7 +1627,7 @@ static inline unsigned long tv_diff(struct timeval *tv1, struct timeval *tv2) {
  * compares <tv1> and <tv2> modulo 1ms: returns 0 if equal, -1 if tv1 < tv2, 1 if tv1 > tv2
  * Must not be used when either argument is eternity. Use tv_cmp2_ms() for that.
  */
-static int tv_cmp_ms(struct timeval *tv1, struct timeval *tv2) {
+static int tv_cmp_ms(const struct timeval *tv1, const struct timeval *tv2) {
     if (tv1->tv_sec == tv2->tv_sec) {
 	if (tv2->tv_usec >= tv1->tv_usec + 1000)
 	    return -1;
@@ -1651,7 +1651,7 @@ static int tv_cmp_ms(struct timeval *tv1, struct timeval *tv2) {
  * if tv2 is passed, 0 is returned.
  * Must not be used when either argument is eternity.
  */
-static inline unsigned long tv_remain(struct timeval *tv1, struct timeval *tv2) {
+static inline unsigned long tv_remain(const struct timeval *tv1, const struct timeval *tv2) {
     unsigned long ret;
   
     if (tv_cmp_ms(tv1, tv2) >= 0)
@@ -1678,7 +1678,7 @@ static inline struct timeval *tv_eternity(struct timeval *tv) {
 /*
  * returns 1 if tv is null, else 0
  */
-static inline int tv_iseternity(struct timeval *tv) {
+static inline int tv_iseternity(const struct timeval *tv) {
     if (tv->tv_sec == 0 && tv->tv_usec == 0)
 	return 1;
     else
@@ -1689,7 +1689,7 @@ static inline int tv_iseternity(struct timeval *tv) {
  * compares <tv1> and <tv2> : returns 0 if equal, -1 if tv1 < tv2, 1 if tv1 > tv2,
  * considering that 0 is the eternity.
  */
-static int tv_cmp2(struct timeval *tv1, struct timeval *tv2) {
+static int tv_cmp2(const struct timeval *tv1, const struct timeval *tv2) {
     if (tv_iseternity(tv1))
 	if (tv_iseternity(tv2))
 	    return 0; /* same */
@@ -1714,7 +1714,7 @@ static int tv_cmp2(struct timeval *tv1, struct timeval *tv2) {
  * compares <tv1> and <tv2> modulo 1 ms: returns 0 if equal, -1 if tv1 < tv2, 1 if tv1 > tv2,
  * considering that 0 is the eternity.
  */
-static int tv_cmp2_ms(struct timeval *tv1, struct timeval *tv2) {
+static int tv_cmp2_ms(const struct timeval *tv1, const struct timeval *tv2) {
     if (tv_iseternity(tv1))
 	if (tv_iseternity(tv2))
 	    return 0; /* same */
@@ -1746,7 +1746,8 @@ static int tv_cmp2_ms(struct timeval *tv1, struct timeval *tv2) {
  * if tv2 is passed, 0 is returned.
  * Returns TIME_ETERNITY if tv2 is eternity.
  */
-static unsigned long tv_remain2(struct timeval *tv1, struct timeval *tv2) {
+static unsigned long tv_remain2(const struct timeval *tv1,
+				const struct timeval *tv2) {
     unsigned long ret;
 
     if (tv_iseternity(tv2))
@@ -1768,7 +1769,8 @@ static unsigned long tv_remain2(struct timeval *tv1, struct timeval *tv2) {
  * a zero tv is ignored. tvmin is returned.
  */
 static inline struct timeval *tv_min(struct timeval *tvmin,
-				     struct timeval *tv1, struct timeval *tv2) {
+				     const struct timeval *tv1,
+				     const struct timeval *tv2) {
 
     if (tv_cmp2(tv1, tv2) <= 0)
 	*tvmin = *tv1;
@@ -1852,7 +1854,7 @@ static inline struct task *task_delete(struct task *t) {
 /*
  * frees a task. Its context must have been freed since it will be lost.
  */
-static inline void task_free(struct task *t) {
+static inline void task_free(const struct task *t) {
     pool_free(task, t);
 }
 
@@ -2003,7 +2005,7 @@ static void pendconn_free(struct pendconn *p) {
 /* Returns the first pending connection for server <s>, which may be NULL if
  * nothing is pending.
  */
-static inline struct pendconn *pendconn_from_srv(struct server *s) {
+static inline struct pendconn *pendconn_from_srv(const struct server *s) {
     if (!s->nbpend)
 	return NULL;
 
@@ -2013,7 +2015,7 @@ static inline struct pendconn *pendconn_from_srv(struct server *s) {
 /* Returns the first pending connection for proxy <px>, which may be NULL if
  * nothing is pending.
  */
-static inline struct pendconn *pendconn_from_px(struct proxy *px) {
+static inline struct pendconn *pendconn_from_px(const struct proxy *px) {
     if (!px->nbpend)
 	return NULL;
 
@@ -2075,7 +2077,7 @@ static struct pendconn *pendconn_add(struct session *sess) {
 /* returns the effective dynamic maxconn for a server, considering the minconn
  * and the proxy's usage relative to its saturation.
  */
-static unsigned int srv_dynamic_maxconn(struct server *s) {
+static unsigned int srv_dynamic_maxconn(const struct server *s) {
     return s->minconn ? 
 	((s->maxconn * s->proxy->nbconn / s->proxy->maxconn) < s->minconn) ? s->minconn :
 	(s->maxconn * s->proxy->nbconn / s->proxy->maxconn) : s->maxconn;
@@ -2084,7 +2086,7 @@ static unsigned int srv_dynamic_maxconn(struct server *s) {
 /* returns 0 if nothing has to be done for server <s> regarding queued connections,
  * and non-zero otherwise. Suited for and if/else usage.
  */
-static inline int may_dequeue_tasks(struct server *s, struct proxy *p) {
+static inline int may_dequeue_tasks(struct server *s, const struct proxy *p) {
     return (s && (s->nbpend || p->nbpend) &&
 	    (!s->maxconn || s->cur_sess < srv_dynamic_maxconn(s)) &&
 	    s->queue_mgt);
@@ -2291,7 +2293,8 @@ static inline struct server *get_server_rr(struct proxy *px) {
  * If any server is found, it will be returned. If no valid server is found,
  * NULL is returned.
  */
-static inline struct server *get_server_sh(struct proxy *px, char *addr, int len) {
+static inline struct server *get_server_sh(const struct proxy *px,
+					   const char *addr, int len) {
     unsigned int h, l;
 
     if (px->srv_map_sz == 0)
@@ -3047,13 +3050,13 @@ int event_srv_write(int fd) {
 
 
 /* returns 1 if the buffer is empty, 0 otherwise */
-static inline int buffer_isempty(struct buffer *buf) {
+static inline int buffer_isempty(const struct buffer *buf) {
     return buf->l == 0;
 }
 
 
 /* returns 1 if the buffer is full, 0 otherwise */
-static inline int buffer_isfull(struct buffer *buf) {
+static inline int buffer_isfull(const struct buffer *buf) {
     return buf->l == BUFSIZE;
 }
 
@@ -3066,7 +3069,7 @@ void buffer_flush(struct buffer *buf) {
 
 
 /* returns the maximum number of bytes writable at once in this buffer */
-int buffer_max(struct buffer *buf) {
+int buffer_max(const struct buffer *buf) {
     if (buf->l == BUFSIZE)
 	return 0;
     else if (buf->r >= buf->w)
@@ -4185,7 +4188,8 @@ int buffer_replace2(struct buffer *b, char *pos, char *end, char *str, int len) 
 }
 
 
-int exp_replace(char *dst, char *src, char *str, regmatch_t *matches) {
+int exp_replace(char *dst, const char *src,
+		const char *str, const regmatch_t *matches) {
     char *old_dst = dst;
 
     while (*str) {
@@ -4231,9 +4235,9 @@ static int ishex(char s)
 }
 
 /* returns NULL if the replacement string <str> is valid, or the pointer to the first error */
-char *check_replace_string(char *str)
+const char *check_replace_string(const char *str)
 {
-    char *err = NULL;
+    const char *err = NULL;
     while (*str) {
 	if (*str == '\\') {
 	    err = str; /* in case of a backslash, we return the pointer to it */
@@ -5360,7 +5364,8 @@ int process_cli(struct session *t) {
  * indicators accordingly. Note that if <status> is 0, no message is
  * returned.
  */
-void srv_close_with_err(struct session *t, int err, int finst, int status, int msglen, char *msg) {
+void srv_close_with_err(struct session *t, int err, int finst,
+			int status, int msglen,	const char *msg) {
     t->srv_state = SV_STCLOSE;
     if (status > 0) {
 	t->logs.status = status;
@@ -7853,11 +7858,12 @@ void sig_term(int sig) {
 #endif
 
 /* returns the pointer to an error in the replacement string, or NULL if OK */
-char *chain_regex(struct hdr_exp **head, regex_t *preg, int action, char *replace) {
+const char *chain_regex(struct hdr_exp **head,
+		  const regex_t *preg, int action, const char *replace) {
     struct hdr_exp *exp;
 
     if (replace != NULL) {
-	char *err;
+	const char *err;
 	err = check_replace_string(replace);
 	if (err)
 	    return err;
@@ -7880,7 +7886,7 @@ char *chain_regex(struct hdr_exp **head, regex_t *preg, int action, char *replac
 /*
  * parse a line in a <global> section. Returns 0 if OK, -1 if error.
  */
-int cfg_parse_global(char *file, int linenum, char **args) {
+int cfg_parse_global(const char *file, int linenum, char **args) {
 
     if (!strcmp(args[0], "global")) {  /* new section */
 	/* no option, nothing special to do */
@@ -8055,10 +8061,10 @@ void init_default_instance() {
 /*
  * parse a line in a <listen> section. Returns 0 if OK, -1 if error.
  */
-int cfg_parse_listen(char *file, int linenum, char **args) {
+int cfg_parse_listen(const char *file, int linenum, char **args) {
     static struct proxy *curproxy = NULL;
     struct server *newsrv = NULL;
-    char *err;
+    const char *err;
     int rc;
 
     if (!strcmp(args[0], "listen")) {  /* new proxy */
@@ -9370,7 +9376,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
  * This function reads and parses the configuration file given in the argument.
  * returns 0 if OK, -1 if error.
  */
-int readcfgfile(char *file) {
+int readcfgfile(const char *file) {
     char thisline[256];
     char *line;
     FILE *f;
