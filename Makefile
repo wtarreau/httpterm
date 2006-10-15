@@ -116,8 +116,9 @@ haproxy: src/list.o src/chtbl.o src/hashpjw.o haproxy.o src/base64.o src/uri_aut
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f {.,src}/*.[oas] {.,src,include,doc}/*{~,.rej} core haproxy test nohup.out gmon.out
-	rm -f haproxy-$(VERSION).tar.gz haproxy-$(VERSION)
+	rm -f *.[oas] src/*.[oas] core haproxy test
+	for dir in . src include doc; do rm -f $$dir/*~ $$dir/*.rej;done
+	rm -f haproxy-$(VERSION).tar.gz haproxy-$(VERSION) nohup.out gmon.out
 
 tar:	clean
 	ln -s . haproxy-$(VERSION)
