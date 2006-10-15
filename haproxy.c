@@ -1099,14 +1099,12 @@ void usage(char *name) {
  */
 void Alert(const char *fmt, ...) {
     va_list argp;
-    struct timeval tv;
     struct tm *tm;
 
     if (!(global.mode & MODE_QUIET) || (global.mode & (MODE_VERBOSE | MODE_STARTING))) {
 	va_start(argp, fmt);
 
-	gettimeofday(&tv, NULL);
-	tm=localtime(&tv.tv_sec);
+	tm = localtime(&now.tv_sec);
 	fprintf(stderr, "[ALERT] %03d/%02d%02d%02d (%d) : ",
 		tm->tm_yday, tm->tm_hour, tm->tm_min, tm->tm_sec, (int)getpid());
 	vfprintf(stderr, fmt, argp);
@@ -1121,14 +1119,12 @@ void Alert(const char *fmt, ...) {
  */
 void Warning(const char *fmt, ...) {
     va_list argp;
-    struct timeval tv;
     struct tm *tm;
 
     if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
 	va_start(argp, fmt);
 
-	gettimeofday(&tv, NULL);
-	tm=localtime(&tv.tv_sec);
+	tm = localtime(&now.tv_sec);
 	fprintf(stderr, "[WARNING] %03d/%02d%02d%02d (%d) : ",
 		tm->tm_yday, tm->tm_hour, tm->tm_min, tm->tm_sec, (int)getpid());
 	vfprintf(stderr, fmt, argp);
@@ -1435,7 +1431,6 @@ char *encode_string(char *start, char *stop,
 void send_log(struct proxy *p, int level, const char *message, ...) {
     static int logfd = -1;	/* syslog UDP socket */
     static long tvsec = -1;	/* to force the string to be initialized */
-    struct timeval tv;
     va_list argp;
     static char logmsg[MAX_SYSLOG_LEN];
     static char *dataptr = NULL;
@@ -1454,11 +1449,10 @@ void send_log(struct proxy *p, int level, const char *message, ...) {
     if (level < 0 || progname == NULL || message == NULL)
 	return;
 
-    gettimeofday(&tv, NULL);
-    if (tv.tv_sec != tvsec || dataptr == NULL) {
+    if (now.tv_sec != tvsec || dataptr == NULL) {
 	/* this string is rebuild only once a second */
-	struct tm *tm = localtime(&tv.tv_sec);
-	tvsec = tv.tv_sec;
+	struct tm *tm = localtime(&now.tv_sec);
+	tvsec = now.tv_sec;
 
 	hdr_len = snprintf(logmsg, sizeof(logmsg),
 			   "<<<<>%s %2d %02d:%02d:%02d %s[%d]: ",
@@ -9801,6 +9795,7 @@ void init(int argc, char **argv) {
 
     /* initialize the libc's localtime structures once for all so that we
      * won't be missing memory if we want to send alerts under OOM conditions.
+     * Also, the Alert() and Warning() functions need <now> to be initialized.
      */
     tv_now(&now);
     localtime(&now.tv_sec);
