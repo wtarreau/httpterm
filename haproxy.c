@@ -1163,14 +1163,16 @@ struct sockaddr_in *str2sa(char *str) {
     int port;
 
     memset(&sa, 0, sizeof(sa));
-    str=strdup(str);
+    str = strdup(str);
+    if (str == NULL)
+	goto out_nofree;
 
-    if ((c=strrchr(str,':')) != NULL) {
-	*c++=0;
-	port=atol(c);
+    if ((c = strrchr(str,':')) != NULL) {
+	*c++ = 0;
+	port = atol(c);
     }
     else
-	port=0;
+	port = 0;
 
     if (*str == '*' || *str == '\0') { /* INADDR_ANY */
 	sa.sin_addr.s_addr = INADDR_ANY;
@@ -1184,10 +1186,11 @@ struct sockaddr_in *str2sa(char *str) {
 	else
 	    sa.sin_addr = *(struct in_addr *) *(he->h_addr_list);
     }
-    sa.sin_port=htons(port);
-    sa.sin_family=AF_INET;
+    sa.sin_port = htons(port);
+    sa.sin_family = AF_INET;
 
     free(str);
+ out_nofree:
     return &sa;
 }
 
@@ -1203,7 +1206,9 @@ int str2net(char *str, struct in_addr *addr, struct in_addr *mask) {
 
     memset(mask, 0, sizeof(*mask));
     memset(addr, 0, sizeof(*addr));
-    str=strdup(str);
+    str = strdup(str);
+    if (!str)
+	return 0;
 
     if ((c = strrchr(str, '/')) != NULL) {
 	*c++ = 0;
@@ -2675,8 +2680,8 @@ int event_cli_read(int fd) {
 		int skerr;
 		socklen_t lskerr = sizeof(skerr);
 		
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-		if (skerr)
+		ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
+		if (ret == -1 || skerr)
 		    ret = -1;
 		else
 		    ret = recv(fd, b->r, max, 0);
@@ -2780,8 +2785,8 @@ int event_srv_read(int fd) {
 		int skerr;
 		socklen_t lskerr = sizeof(skerr);
 
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-		if (skerr)
+		ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
+		if (ret == -1 || skerr)
 		    ret = -1;
 		else
 		    ret = recv(fd, b->r, max, 0);
@@ -2875,8 +2880,8 @@ int event_cli_write(int fd) {
 	    int skerr;
 	    socklen_t lskerr = sizeof(skerr);
 
-	    getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-	    if (skerr)
+	    ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
+	    if (ret == -1 || skerr)
 		ret = -1;
 	    else
 		ret = send(fd, b->w, max, MSG_DONTWAIT);
@@ -2959,8 +2964,8 @@ int event_srv_write(int fd) {
 	    if (s->srv_state == SV_STCONN) {
 		int skerr;
 		socklen_t lskerr = sizeof(skerr);
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-		if (skerr) {
+		ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
+		if (ret == -1 || skerr) {
 		    s->res_sw = RES_ERROR;
 		    fdtab[fd].state = FD_STERROR;
 		    task_wakeup(&rq, t);
@@ -2982,8 +2987,8 @@ int event_srv_write(int fd) {
 	{
 	    int skerr;
 	    socklen_t lskerr = sizeof(skerr);
-	    getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-	    if (skerr)
+	    ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
+	    if (ret == -1 || skerr)
 		ret = -1;
 	    else
 		ret = send(fd, b->w, max, MSG_DONTWAIT);
@@ -4082,8 +4087,7 @@ int event_srv_chk_r(int fd) {
 
     result = len = -1;
 
-    getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr);
-    if (!skerr) {
+    if (!getsockopt(fd, SOL_SOCKET, SO_ERROR, &skerr, &lskerr) && !skerr) {
 #ifndef MSG_NOSIGNAL
 	    len = recv(fd, reply, sizeof(reply), 0);
 #else
