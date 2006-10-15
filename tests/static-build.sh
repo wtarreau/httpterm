@@ -1,0 +1,1 @@
+make -j 4 CC=gcc-3.3 LD=gcc-3.3 CPU_OPTS="-march=i686 -mcpu=i686 -O2 -momit-leaf-frame-pointer -mpreferred-stack-boundary=2 -falign-jumps=0" SMALL_OPTS="-DBUFSIZE=16060 -DMAXREWRITE=1460" DEFINE="-DSTATTIME=0" LDFLAGS="-static" REGEX=pcre

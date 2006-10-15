@@ -1,0 +1,81 @@
+This patch implements the "leastconn" load balancing algorithm.
+It was sent to me by Oleksandr Krailo. I've not tried it yet, but
+it looks correct. However, I will change it before merging it, so
+that it still implements round robin among servers with equal
+numbers of connections, otherwise the first servers declared will
+get all the traffic.
+
+
+--- haproxy-1.2.14.orig/haproxy.c
++++ haproxy-1.2.14/haproxy.c
+@@ -378,8 +378,9 @@
+ #define PR_O_USE_ALL_BK	0x00100000	/* load-balance between backup servers */
+ #define PR_O_FORCE_CLO	0x00200000	/* enforce the connection close immediately after server response */
+ #define PR_O_BALANCE_SH	0x00400000	/* balance on source IP hash */
+-#define PR_O_BALANCE	(PR_O_BALANCE_RR | PR_O_BALANCE_SH)
+ #define PR_O_ABRT_CLOSE	0x00800000	/* immediately abort request when client closes */
++#define PR_O_BALANCE_LC	0x01000000	/* balance on least connection (fewer active jobs) server */
++#define PR_O_BALANCE	(PR_O_BALANCE_RR | PR_O_BALANCE_SH | PR_O_BALANCE_LC)
+ 
+ /* various session flags, bits values 0x01 to 0x20 (shift 0) */
+ #define SN_DIRECT	0x00000001	/* connection made on the server matching the client cookie */
+@@ -2221,6 +2222,34 @@
+ 
+ 
+ /*
++ * This function tries to find a running server for the proxy <px> following
++ * the least load method. If no valid server is found, NULL is returned.
++ */
++static inline struct server *get_server_lc(struct proxy *px) {
++    int s, i;
++    struct server *srv, *t;
++
++    if (px->srv_map_sz == 0)
++	return NULL;
++
++    i = 0;
++    t = NULL;
++    s = 0;
++
++    while (i < px->srv_map_sz) {
++	srv = px->srv_map[i++];
++	if (!srv->maxconn || srv->cur_sess < srv_dynamic_maxconn(srv)) {
++	    if (s > srv->cur_sess || t == NULL) {
++		t = srv;
++		s = srv->cur_sess;
++	    }
++	}
++    }
++    return t;
++}
++
++
++/*
+  * This function marks the session as 'assigned' in direct or dispatch modes,
+  * or tries to assign one in balance mode, according to the algorithm. It does
+  * nothing if the session had already been assigned a server.
+@@ -2270,6 +2299,11 @@
+ 				       (void *)&((struct sockaddr_in *)&s->cli_addr)->sin_addr,
+ 				       len);
+ 	    }
++	    else if (s->proxy->options & PR_O_BALANCE_LC) {
++		s->srv = get_server_lc(s->proxy);
++		if (!s->srv)
++		    return SRV_STATUS_FULL;
++	    }
+ 	    else /* unknown balancing algorithm */
+ 		return SRV_STATUS_INTERNAL;
+ 	}
+@@ -8461,8 +8495,11 @@
+ 	    else if (!strcmp(args[1], "source")) {
+ 		curproxy->options |= PR_O_BALANCE_SH;
+ 	    }
++	    else if (!strcmp(args[1], "leastconn")) {
++		curproxy->options |= PR_O_BALANCE_LC;
++	    }
+ 	    else {
+-		Alert("parsing [%s:%d] : '%s' only supports 'roundrobin' and 'source' options.\n", file, linenum, args[0]);
++		Alert("parsing [%s:%d] : '%s' only supports 'roundrobin', 'source' and 'leastconn' options.\n", file, linenum, args[0]);
+ 		return -1;
+ 	    }
+ 	}
