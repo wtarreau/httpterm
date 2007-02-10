@@ -4588,6 +4588,8 @@ int process_cli(struct session *t) {
 		/* only do insert, if lookup fails */
 		if (chtbl_lookup(&(t->proxy->htbl_proxy), (void *)&asession_temp)) {
 		  if ((asession_temp = pool_alloc(appsess)) == NULL) {
+		    /* free previously allocated memory */
+		    pool_free_to(apools.sessid, local_asession.sessid);
 		    Alert("Not enough memory process_cli():asession:calloc().\n");
 		    send_log(t->proxy, LOG_ALERT, "Not enough memory process_cli():asession:calloc().\n");
 		    return 0;
@@ -4597,7 +4599,7 @@ int process_cli(struct session *t) {
 		  chtbl_insert(&(t->proxy->htbl_proxy), (void *) asession_temp);
 		} /* end if (chtbl_lookup()) */
 		else {
-		  /*free wasted memory;*/
+		  /* free previously allocated memory */
 		  pool_free_to(apools.sessid, local_asession.sessid);
 		}
 
@@ -4953,6 +4955,8 @@ int process_cli(struct session *t) {
 			    /* only do insert, if lookup fails */
 			    if (chtbl_lookup(&(t->proxy->htbl_proxy), (void *) &asession_temp) != 0) {
 				if ((asession_temp = pool_alloc(appsess)) == NULL) {
+				    /* free previously allocated memory */
+				    pool_free_to(apools.sessid, local_asession.sessid);
 				    Alert("Not enough memory process_cli():asession:calloc().\n");
 				    send_log(t->proxy, LOG_ALERT, "Not enough memory process_cli():asession:calloc().\n");
 				    return 0;
@@ -4963,7 +4967,7 @@ int process_cli(struct session *t) {
 				chtbl_insert(&(t->proxy->htbl_proxy), (void *) asession_temp);
 			    }
 			    else{
-				/* free wasted memory */
+				/* free previously allocated memory */
 				pool_free_to(apools.sessid, local_asession.sessid);
 			    }
 			    
@@ -6169,8 +6173,8 @@ int process_srv(struct session *t) {
 		      asession_temp = &local_asession;
 		      
 		      if ((asession_temp->sessid = pool_alloc_from(apools.sessid, apools.ses_msize)) == NULL) {
-			Alert("Not enought Memory process_srv():asession->sessid:malloc().\n");
-			send_log(t->proxy, LOG_ALERT, "Not enought Memory process_srv():asession->sessid:malloc().\n");
+			Alert("Not enough Memory process_srv():asession->sessid:malloc().\n");
+			send_log(t->proxy, LOG_ALERT, "Not enough Memory process_srv():asession->sessid:malloc().\n");
 		      }
 		      memcpy(asession_temp->sessid, p3, t->proxy->appsession_len);
 		      asession_temp->sessid[t->proxy->appsession_len] = 0;
@@ -6179,8 +6183,10 @@ int process_srv(struct session *t) {
 		      /* only do insert, if lookup fails */
 		      if (chtbl_lookup(&(t->proxy->htbl_proxy), (void *) &asession_temp) != 0) {
 	                  if ((asession_temp = pool_alloc(appsess)) == NULL) {
-		              Alert("Not enought Memory process_srv():asession:calloc().\n");
-		              send_log(t->proxy, LOG_ALERT, "Not enought Memory process_srv():asession:calloc().\n");
+			      /* free previously allocated memory */
+			      pool_free_to(apools.sessid, local_asession.sessid);
+		              Alert("Not enough Memory process_srv():asession:calloc().\n");
+		              send_log(t->proxy, LOG_ALERT, "Not enough Memory process_srv():asession:calloc().\n");
             	              return 0;
                           }
 			  asession_temp->sessid = local_asession.sessid;
@@ -6188,14 +6194,14 @@ int process_srv(struct session *t) {
 			  chtbl_insert(&(t->proxy->htbl_proxy), (void *) asession_temp);
 		      }/* end if (chtbl_lookup()) */
 		      else {
-		      	/* free wasted memory */
-		      	pool_free_to(apools.sessid, local_asession.sessid);
+			/* free previously allocated memory */
+			pool_free_to(apools.sessid, local_asession.sessid);
 		      } /* end else from if (chtbl_lookup()) */
 		      
 		      if (asession_temp->serverid == NULL) {
 		        if ((asession_temp->serverid = pool_alloc_from(apools.serverid, apools.ser_msize)) == NULL) {
-			  Alert("Not enought Memory process_srv():asession->sessid:malloc().\n");
-			  send_log(t->proxy, LOG_ALERT, "Not enought Memory process_srv():asession->sessid:malloc().\n");
+			  Alert("Not enough Memory process_srv():asession->sessid:malloc().\n");
+			  send_log(t->proxy, LOG_ALERT, "Not enough Memory process_srv():asession->sessid:malloc().\n");
 		        }
 			asession_temp->serverid[0] = '\0';
 		      }
