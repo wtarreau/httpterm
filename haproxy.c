@@ -4557,8 +4557,9 @@ int process_cli(struct session *t) {
 	     */
 
 	    if (!method_checked && (t->proxy->appsession_name != NULL) &&
-		((memcmp(req->h, "GET ", 4) == 0) || (memcmp(req->h, "POST ", 4) == 0)) &&
-		((request_line = memchr(req->h, ';', req->lr - req->h)) != NULL)) {
+		((memcmp(req->h, "GET ", 4) == 0) || (memcmp(req->h, "POST ", 5) == 0)) &&
+		((request_line = memchr(req->h, ';', req->lr - req->h)) != NULL) ||
+		((1 + t->proxy->appsession_name_len + 1 + t->proxy->appsession_len) > (req->lr - request_line))) {
 
 	      /* skip ; */
 	      request_line++;
