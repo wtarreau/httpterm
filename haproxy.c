@@ -4873,7 +4873,8 @@ int process_cli(struct session *t) {
 				srv = NULL;
 
 			    while (srv) {
-				if ((srv->cklen == delim - p3) && !memcmp(p3, srv->cookie, delim - p3)) {
+				if ((srv->cookie && srv->cklen == delim - p3) &&
+				    !memcmp(p3, srv->cookie, delim - p3)) {
 				    if (srv->state & SRV_RUNNING || t->proxy->options & PR_O_PERSIST) {
 					/* we found the server and it's usable */
 					t->flags &= ~SN_CK_MASK;
@@ -6137,14 +6138,16 @@ int process_srv(struct session *t) {
 			    delete_header = 1;
 			    t->flags |= SN_SCK_DELETED;
 			}
-			else if ((t->srv) && (t->proxy->options & PR_O_COOK_RW)) {
+			else if ((t->srv) && (t->srv->cookie) &&
+				 (t->proxy->options & PR_O_COOK_RW)) {
 			    /* replace bytes p3->p4 with the cookie name associated
 			     * with this server since we know it.
 			     */
 			    buffer_replace2(rep, p3, p4, t->srv->cookie, t->srv->cklen);
 			    t->flags |= SN_SCK_INSERTED | SN_SCK_DELETED;
 			}
-			else if ((t->srv) && (t->proxy->options & PR_O_COOK_PFX)) {
+			else if ((t->srv) && (t->srv->cookie) &&
+				 (t->proxy->options & PR_O_COOK_PFX)) {
 			    /* insert the cookie name associated with this server
 			     * before existing cookie, and insert a delimitor between them..
 			     */
