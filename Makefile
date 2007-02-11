@@ -109,7 +109,8 @@ LDFLAGS = -g
 
 all: haproxy
 
-haproxy: src/list.o src/chtbl.o src/hashpjw.o haproxy.o src/base64.o src/uri_auth.o
+haproxy: src/list.o src/chtbl.o src/hashpjw.o haproxy.o src/base64.o \
+	 src/uri_auth.o src/rbtree.o
 	$(LD) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 %.o:	%.c
