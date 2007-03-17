@@ -53,6 +53,8 @@
 #include <sys/resource.h>
 #include <time.h>
 #include <syslog.h>
+#include <pwd.h>
+#include <grp.h>
 
 #ifdef USE_PCRE
 #include <pcre.h>
@@ -7880,7 +7882,7 @@ int cfg_parse_global(const char *file, int linenum, char **args) {
     }
     else if (!strcmp(args[0], "uid")) {
 	if (global.uid != 0) {
-	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
+	    Alert("parsing [%s:%d] : user/uid already specified. Continuing.\n", file, linenum);
 	    return 0;
 	}
 	if (*(args[1]) == 0) {
@@ -7891,7 +7893,7 @@ int cfg_parse_global(const char *file, int linenum, char **args) {
     }
     else if (!strcmp(args[0], "gid")) {
 	if (global.gid != 0) {
-	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
+	    Alert("parsing [%s:%d] : gid/group was already specified. Continuing.\n", file, linenum, args[0]);
 	    return 0;
 	}
 	if (*(args[1]) == 0) {
@@ -7900,6 +7902,40 @@ int cfg_parse_global(const char *file, int linenum, char **args) {
 	}
 	global.gid = atol(args[1]);
     }
+    /* user/group name handling */
+    else if (!strcmp(args[0], "user")) {
+	struct passwd *ha_user;
+	if (global.uid != 0) {
+	    Alert("parsing [%s:%d] : user/uid already specified. Continuing.\n", file, linenum);
+	    return 0;
+	}
+	errno = 0;
+	ha_user = getpwnam(args[1]);
+	if (ha_user != NULL) {
+	    global.uid = (int)ha_user->pw_uid;
+        }
+	else {
+	    Alert("parsing [%s:%d] : cannot find user id for '%s' (%d:%s)\n", file, linenum, args[1], errno, strerror(errno));
+	    exit(1);
+	}
+    }
+    else if (!strcmp(args[0], "group")) {
+	struct group *ha_group;
+	if (global.gid != 0) {
+	    Alert("parsing [%s:%d] : gid/group was already specified. Continuing.\n", file, linenum, args[0]);
+	    return 0;
+	}
+	errno = 0;
+	ha_group = getgrnam(args[1]);
+	if (ha_group != NULL) {
+	    global.gid = (int)ha_group->gr_gid;
+        }
+	else {
+	    Alert("parsing [%s:%d] : cannot find group id for '%s' (%d:%s)\n", file, linenum, args[1], errno, strerror(errno));
+	    exit(1);
+	}
+    }
+    /* end of user/group name handling*/
     else if (!strcmp(args[0], "nbproc")) {
 	if (global.nbproc != 0) {
 	    Alert("parsing [%s:%d] : '%s' already specified. Continuing.\n", file, linenum, args[0]);
