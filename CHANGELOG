@@ -1,6 +1,16 @@
 ChangeLog :
 ===========
 
+2007/03/17 : 1.2.17
+    - replaced the linked-list with a faster rbtree in the scheduler
+    - add user/group support (Marcus Rueckert)
+    - add the "except" keyword to the "forwardfor" option (Bryan Germann)
+    - re-implemented support for multi-line headers (was incidently reverted)
+    - fixed possible crash when no cookie was set on a server
+    - fixed various length checks in appsession
+    - fixed unlikely memory leak in appsession in case of memory shortage
+    - updates to the architecture guide
+
 2006/10/15 : 1.2.16
     - fix broken redispatch option in case the connection has already
       been marked "in progress" (ie: nearly always).
