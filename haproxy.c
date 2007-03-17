@@ -715,6 +715,7 @@ struct proxy {
     unsigned int nbconn, nbconn_max;	/* # of active sessions */
     unsigned int cum_conn;		/* cumulated number of processed sessions */
     unsigned int maxconn;		/* max # of active sessions */
+    struct in_addr except_net, except_mask; /* don't x-forward-for for this address. FIXME: should support IPv6 */
     unsigned failed_conns, failed_resp;	/* failed connect() and responses */
     unsigned failed_secu;		/* blocked responses because of security concerns */
     int conn_retries;			/* maximum number of connect retries */
@@ -4392,11 +4393,23 @@ int process_cli(struct session *t) {
 		    if (t->cli_addr.ss_family == AF_INET) {
 			unsigned char *pn;
 			pn = (unsigned char *)&((struct sockaddr_in *)&t->cli_addr)->sin_addr;
-			len = sprintf(trash, "X-Forwarded-For: %d.%d.%d.%d\r\n",
-				      pn[0], pn[1], pn[2], pn[3]);
-			buffer_replace2(req, req->h, req->h, trash, len);
+
+			/* Add an X-Forwarded-For header unless the source IP is
+			 * in the 'except' network range.
+			 */
+			if (!t->proxy->except_mask.s_addr ||
+			    (t->proxy->except_mask.s_addr &&
+			     (((struct sockaddr_in *)&t->cli_addr)->sin_addr.s_addr & t->proxy->except_mask.s_addr)
+			     != t->proxy->except_net.s_addr)) {
+			    len = sprintf(trash, "X-Forwarded-For: %d.%d.%d.%d\r\n",
+					  pn[0], pn[1], pn[2], pn[3]);
+			    buffer_replace2(req, req->h, req->h, trash, len);
+			}
 		    }
 		    else if (t->cli_addr.ss_family == AF_INET6) {
+			/* FIXME: for the sake of completeness, we should also support
+			 * 'except' here, although it is mostly useless in this case.
+			 */
 			char pn[INET6_ADDRSTRLEN];
 			inet_ntop(AF_INET6,
 				  (const void *)&((struct sockaddr_in6 *)(&t->cli_addr))->sin6_addr,
@@ -8161,6 +8174,8 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 	curproxy->source_addr = defproxy.source_addr;
 	curproxy->mon_net = defproxy.mon_net;
 	curproxy->mon_mask = defproxy.mon_mask;
+	curproxy->except_net = defproxy.except_net;
+	curproxy->except_mask = defproxy.except_mask;
 
 	if (defproxy.monitor_uri)
 	    curproxy->monitor_uri = strdup(defproxy.monitor_uri);
@@ -8532,9 +8547,27 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 	else if (!strcmp(args[1], "keepalive"))
 	    /* enable keep-alive */
 	    curproxy->options |= PR_O_KEEPALIVE;
-	else if (!strcmp(args[1], "forwardfor"))
-	    /* insert x-forwarded-for field */
+	else if (!strcmp(args[1], "forwardfor")) {
+	    /* insert x-forwarded-for field, but not for the
+	     * IP address listed as an except.
+	     */
+	    if (*(args[2])) {
+		if (!strcmp(args[2], "except")) {
+		    if (!*args[3] || !str2net(args[3], &curproxy->except_net, &curproxy->except_mask)) {
+			Alert("parsing [%s:%d] : '%s' only supports optional 'except' address[/mask].\n",
+			      file, linenum, args[0]);
+			return -1;
+		    }
+		    /* flush useless bits */
+		    curproxy->except_net.s_addr &= curproxy->except_mask.s_addr;
+		} else {
+		    Alert("parsing [%s:%d] : '%s' only supports optional 'except' address[/mask].\n",
+			  file, linenum, args[0]);
+		    return -1;
+		}
+	    }
 	    curproxy->options |= PR_O_FWDFOR;
+	}
 	else if (!strcmp(args[1], "logasap"))
 	    /* log as soon as possible, without waiting for the session to complete */
 	    curproxy->options |= PR_O_LOGASAP;
