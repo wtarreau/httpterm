@@ -84,6 +84,9 @@ haproxy: src/list.o src/chtbl.o src/hashpjw.o haproxy.o src/base64.o \
 	 src/uri_auth.o src/rbtree.o
 	$(LD) $(LDFLAGS) -o $@ $> $(LIBS)
 
+src/rbtree.o:	src/rbtree.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 src/base64.o:	src/base64.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
