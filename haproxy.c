@@ -5589,7 +5589,7 @@ int process_srv(struct session *t) {
     else if (s == SV_STCONN) { /* connection in progress */
 	if (c == CL_STCLOSE || c == CL_STSHUTW ||
 	    (c == CL_STSHUTR &&
-	     (t->req->l == 0 || t->proxy->options & PR_O_ABRT_CLOSE))) { /* give up */
+	     ((t->req->l == 0 && t->res_sw == RES_SILENT) || t->proxy->options & PR_O_ABRT_CLOSE))) { /* give up */
 	    tv_eternity(&t->cnexpire);
 	    fd_delete(t->srv_fd);
 	    if (t->srv)
