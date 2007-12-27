@@ -2138,6 +2138,16 @@ int process_cli(struct session *t) {
 	return t->cli_state != CL_STHEADERS;
     }
     else if (c == CL_STWAIT) {
+	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_NULL)) {
+	    /* last read ? */
+	    t->sock_st |= SKST_SCR;
+	    if (t->sock_st & SKST_SCW)
+		goto terminate_client;
+	    FD_CLR(t->cli_fd, StaticReadEvent);
+	    tv_eternity(&t->crexpire);
+	    shutdown(t->cli_fd, SHUT_RD);
+	}
+
 	if (tv_cmp2_ms(&t->cnexpire, &now) > 0)
 	    return 0; /* nothing changed */
 
