@@ -1,6 +1,6 @@
 /*
  * HA-Proxy : High Availability-enabled HTTP/TCP proxy
- * 2000-2007 - Willy Tarreau - w@1wt.eu
+ * 2000-2008 - Willy Tarreau - w@1wt.eu
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -105,11 +105,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HAPROXY_VERSION
-#define HAPROXY_VERSION "1.2.17"
+#define HAPROXY_VERSION "1.2.18"
 #endif
 
 #ifndef HAPROXY_DATE
-#define HAPROXY_DATE	"2007/03/17"
+#define HAPROXY_DATE	"2008/05/25"
 #endif
 
 /* this is for libc5 for example */

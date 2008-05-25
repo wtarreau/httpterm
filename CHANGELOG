@@ -1,6 +1,10 @@
 ChangeLog :
 ===========
 
+2008/05/25 : 1.2.18
+    - fix early server close after client close
+    - fix build of rbtree on BSD
+
 2007/03/17 : 1.2.17
     - replaced the linked-list with a faster rbtree in the scheduler
     - add user/group support (Marcus Rueckert)

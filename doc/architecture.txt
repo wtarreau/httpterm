@@ -2,9 +2,9 @@
                                  HAProxy
                            Architecture  Guide
                            -------------------
-                             version 1.2.17
+                             version 1.2.18
                               willy tarreau
-                               2007/03/17
+                               2008/05/25
 
 
 This document provides real world examples with working configurations.
