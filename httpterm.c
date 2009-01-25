@@ -109,7 +109,7 @@
 #endif
 
 #ifndef RESPSIZE
-#define RESPSIZE	1048576
+#define RESPSIZE	65536
 #endif
 
 // max # args on a configuration line
@@ -1514,7 +1514,9 @@ int event_cli_write(int fd) {
     struct buffer *b = s->rep;
     char *data_ptr;
     int ret, max;
+    int max_loops = 4;
 
+ loop_again:
     if (b->l == 0) { /* let's realign the buffer to optimize I/O */
 	b->r = b->w = b->h = b->lr  = b->data;
 	max = 0;
@@ -1540,7 +1542,8 @@ int event_cli_write(int fd) {
 		if (max > sizeof(common_response) - offset)
 		    max = sizeof(common_response) - offset;
 	    } else {
-		s->res_cw = RES_NULL;
+		if (s->res_cw != RES_DATA)
+		    s->res_cw = RES_NULL;
 		task_wakeup(&rq, t);
 		tv_eternity(&s->cwexpire);
 		FD_CLR(fd, StaticWriteEvent);
@@ -1578,14 +1581,19 @@ int event_cli_write(int fd) {
 	    }
 	    
 	    s->res_cw = RES_DATA;
+	    if (--max_loops > 0)
+		goto loop_again;
 	}
 	else if (ret == 0) {
 	    /* nothing written, just make as if we were never called */
 //	    s->res_cw = RES_NULL;
 	    return 0;
 	}
-	else if (errno == EAGAIN) /* ignore EAGAIN */
+	else if (errno == EAGAIN) { /* ignore EAGAIN */
+	    if (s->res_cw == RES_DATA)
+		goto return_data;
 	    return 0;
+	}
 	else {
 	    s->res_cw = RES_ERROR;
 	    fdtab[fd].state = FD_STERROR;
@@ -1595,7 +1603,7 @@ int event_cli_write(int fd) {
 	s->res_cw = RES_ERROR;
 	fdtab[fd].state = FD_STERROR;
     }
-
+ return_data:
     if (s->proxy->clitimeout) {
 	tv_delayfrom(&s->cwexpire, &now, s->proxy->clitimeout);
 	/* FIXME: to prevent the client from expiring read timeouts during writes,
