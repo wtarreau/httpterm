@@ -2,7 +2,7 @@
 # You should use it this way :
 #   make TARGET=os CPU=cpu
 
-VERSION := 1.1.1
+VERSION := 1.2.0
 
 # Select target OS. TARGET must match a system for which COPTS and LIBS are
 # correctly defined below.
@@ -101,6 +101,6 @@ clean:
 
 tar:	clean
 	ln -s . httpterm-$(VERSION)
-	tar --exclude=httpterm-$(VERSION)/.git --exclude=httpterm-$(VERSION)/httpterm-$(VERSION) -cf - httpterm-$(VERSION)/* | gzip -c9 >httpterm-$(VERSION).tar.gz
+	tar --exclude=httpterm-$(VERSION)/.git --exclude=httpterm-$(VERSION)/httpterm-$(VERSION).tar.gz --exclude=httpterm-$(VERSION)/httpterm-$(VERSION) -cf - httpterm-$(VERSION)/* | gzip -c9 >httpterm-$(VERSION).tar.gz
 	rm -f httpterm-$(VERSION)
 
