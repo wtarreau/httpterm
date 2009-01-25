@@ -1523,10 +1523,16 @@ int event_cli_write(int fd) {
 	data_ptr = b->w;
 	if (max == 0) {
 	    if (s->to_write > 0) {
-		data_ptr = common_response;
-		max = sizeof(common_response);
-		if (max > s->to_write)
-		    max = s->to_write;
+		/* we'll send the buffer data, and make sure to align data according to
+		 * what was already sent. This will guarantee that all requests will get
+		 * the exact same contents.
+		 */
+		unsigned int offset;
+		offset = (s->req_size - s->to_write) % 50;
+		data_ptr = common_response + offset;
+		max = s->to_write;
+		if (max > sizeof(common_response) - offset)
+		    max = sizeof(common_response) - offset;
 	    } else {
 		s->res_cw = RES_NULL;
 		task_wakeup(&rq, t);
