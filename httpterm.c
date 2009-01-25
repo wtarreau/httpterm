@@ -438,6 +438,9 @@ char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
 int  pid;			/* current process id */
 
+/* send zeroes instead of aligned data */
+#define GFLAGS_SEND_ZERO	0x1
+
 /* global options */
 static struct {
     int uid;
@@ -450,6 +453,7 @@ static struct {
     int mode;
     char *chroot;
     char *pidfile;
+    unsigned int flags;		/* GFLAGS_* */
 } global;
 
 /*********************************************************************/
@@ -2813,6 +2817,9 @@ int cfg_parse_global(char *file, int linenum, char **args) {
     else if (!strcmp(args[0], "debug")) {
 	global.mode |= MODE_DEBUG;
     }
+    else if (!strcmp(args[0], "sendzero")) {
+	global.flags |= GFLAGS_SEND_ZERO;
+    }
     else if (!strcmp(args[0], "noepoll")) {
 	cfg_polling_mechanism &= ~POLL_USE_EPOLL;
     }
@@ -3429,16 +3436,6 @@ void init(int argc, char **argv) {
     tv_now(&now);
     localtime(&now.tv_sec);
 
-    /* fill the common response with human-readable data : 50 bytes per line */
-    for (i = 0; i < sizeof(common_response); i++) {
-	if (i % 50 == 49)
-	    common_response[i] = '\n';
-	else if (i % 10 == 0)
-	    common_response[i] = '.';
-	else
-	    common_response[i] = '0' + i % 10;
-    }
-
     cfg_polling_mechanism = POLL_USE_SELECT;  /* select() is always available */
 #if defined(ENABLE_POLL)
     cfg_polling_mechanism |= POLL_USE_POLL;
@@ -3522,6 +3519,18 @@ void init(int argc, char **argv) {
     if (global.mode & MODE_CHECK) {
 	qfprintf(stdout, "Configuration file is valid : %s\n", cfg_cfgfile);
 	exit(0);
+    }
+
+    if (!(global.flags & GFLAGS_SEND_ZERO)) {
+	/* fill the common response with human-readable data : 50 bytes per line */
+	for (i = 0; i < sizeof(common_response); i++) {
+	    if (i % 50 == 49)
+		common_response[i] = '\n';
+	    else if (i % 10 == 0)
+		common_response[i] = '.';
+	    else
+		common_response[i] = '0' + i % 10;
+	}
     }
 
     if (cfg_maxconn > 0)
