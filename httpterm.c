@@ -1909,14 +1909,20 @@ static int ishex(char s)
 static inline void srv_return_page(struct session *t) {
     int hlen;
     struct server *srv;
-    int code, cache, size, time;
 
     srv = t->srv;
 
-    code = (t->req_code == -1) ? srv->resp_code : t->req_code;
-    cache = (t->req_cache == -1) ? srv->resp_cache : t->req_cache;
-    size = (t->req_size < 0) ? srv->resp_size : t->req_size;
-    time = (t->req_time < 0) ? srv->resp_time : t->req_time;
+    if (t->req_code < 0)
+	t->req_code = srv->resp_code;
+
+    if (t->req_cache < 0)
+	t->req_cache = srv->resp_cache;
+
+    if (t->req_size < 0)
+	t->req_size = srv->resp_size;
+
+    if (t->req_time < 0)
+	t->req_time = srv->resp_time;
 
     hlen = sprintf(t->rep->data,
 		   "HTTP/1.0 %03d\r\n"
@@ -1925,14 +1931,14 @@ static inline void srv_return_page(struct session *t) {
 		   "X-req: size=%ld, time=%ld ms\r\n"
 		   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
 		   "\r\n",
-		   code,
-		   cache ? "" : "Cache-Control: no-cache\r\n",
+		   t->req_code,
+		   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 		   (long)t->req->total, t->logs.t_request, 
-		   srv->id, code, cache,
-		   size, time,
+		   srv->id, t->req_code, t->req_cache,
+		   t->req_size, t->req_time,
 		   t->logs.t_queue - t->logs.t_request);
 
-    t->to_write = size;
+    t->to_write = t->req_size;
     t->rep->l = hlen;
     t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
     t->rep->r += hlen;
