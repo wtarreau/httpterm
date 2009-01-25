@@ -437,6 +437,7 @@ int cfg_maxconn = 0;		/* # of simultaneous connections, (-n) */
 char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
 int  pid;			/* current process id */
+char *cmdline_listen = NULL;	/* command-line listen address (ip:port) */
 
 /* send zeroes instead of aligned data */
 #define GFLAGS_SEND_ZERO	0x1
@@ -636,6 +637,7 @@ void usage(char *name) {
 #if defined(ENABLE_POLL)
 	    "        -dp disables poll() usage even when available\n"
 #endif
+	    "        -L [<ip>]:<port> adds a listener with one server\n"
 	    "        -sf/-st [pid ]* finishes/terminates old pids. Must be last arguments.\n"
 	    "\n",
 	    name, DEFAULT_MAXCONN, cfg_maxpconn);
@@ -2878,6 +2880,9 @@ int cfg_parse_global(char *file, int linenum, char **args) {
 	    global.maxconn = DEFAULT_MAXCONN;
 	}
 #endif /* SYSTEM_MAXCONN */
+	/* we want to update the default instance's maxconn too */
+	if (!cfg_maxconn)
+	    defproxy.maxconn = global.maxconn;
     }
     else if (!strcmp(args[0], "ulimit-n")) {
 	if (global.rlimit_nofile != 0) {
@@ -2923,13 +2928,13 @@ int cfg_parse_global(char *file, int linenum, char **args) {
 void init_default_instance() {
     memset(&defproxy, 0, sizeof(defproxy));
     defproxy.state = PR_STNEW;
-    defproxy.maxconn = global.maxconn;
+    defproxy.maxconn = cfg_maxconn ? cfg_maxconn : global.maxconn;
 }
 
 /*
  * parse a line in a <listen> section. Returns 0 if OK, -1 if error.
  */
-int cfg_parse_listen(char *file, int linenum, char **args) {
+int cfg_parse_listen(const char *file, int linenum, char **args) {
     static struct proxy *curproxy = NULL;
     struct server *newsrv = NULL;
 
@@ -3100,7 +3105,7 @@ int cfg_parse_listen(char *file, int linenum, char **args) {
 	}
 
 	if (!*args[2]) {
-	    Alert("parsing [%s:%d] : '%s' expects <name> and <addr>[:<port>] as arguments.\n",
+	    Alert("parsing [%s:%d] : '%s' expects <name> as arguments.\n",
 		  file, linenum, args[0]);
 	    return -1;
 	}
@@ -3299,6 +3304,30 @@ int readcfgfile(char *file) {
     }
     fclose(f);
 
+    /* Maybe the user has specified a listener on the command line */
+    if (cmdline_listen) {
+	const char *name = "command line";
+	args[0] = "listen";
+	args[1] = "dummy";
+	args[2] = cmdline_listen;
+	args[3] = "\0";
+	if (cfg_parse_listen(name, 0, args) < 0)
+	    return -1;
+
+	args[0] = "object";
+	args[1] = "name";
+	args[2] = "dummy";
+	args[3] = "\0";
+	if (cfg_parse_listen(name, 0, args) < 0)
+	    return -1;
+
+	args[0] = "clitimeout";
+	args[1] = "10000";
+	args[2] = "\0";
+	if (cfg_parse_listen(name, 0, args) < 0)
+	    return -1;
+    }
+
     /*
      * Now, check for the integrity of all that we have collected.
      */
@@ -3492,6 +3521,7 @@ void init(int argc, char **argv) {
 		case 'N' : cfg_maxpconn = atol(*argv); break;
 		case 'f' : cfg_cfgfile = *argv; break;
 		case 'p' : cfg_pidfile = *argv; break;
+		case 'L' : cmdline_listen = *argv; break;
 		default: usage(old_argv);
 		}
 	    }
