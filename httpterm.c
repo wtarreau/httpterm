@@ -2251,6 +2251,7 @@ int process_cli(struct session *t) {
 	    } else {
 		if ((rep->l == 0 && t->to_write == 0)) {
 		    /* this is the end */
+		    shutdown(t->cli_fd, SHUT_WR);
 		    goto terminate_client;
 		}
 		else { /* buffer not empty */
@@ -3707,6 +3708,10 @@ int start_proxies(int verbose) {
 #ifdef TCP_QUICKACK
 	    /* we don't want quick ACKs there */
 	    setsockopt(fd, SOL_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
+#endif
+#ifdef TCP_CORK
+	    /* don't send partial frames, and merge FIN with last ACK */
+	    setsockopt(fd, SOL_TCP, TCP_CORK, (char *) &one, sizeof(one));
 #endif
 
 	    /* the function for the accept() event */
