@@ -54,7 +54,6 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <sys/resource.h>
-#include <sys/stat.h>
 #include <time.h>
 
 #if defined(__dietlibc__)
@@ -76,11 +75,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HTTPTERM_VERSION
-#define HTTPTERM_VERSION "1.3.0"
+#define HTTPTERM_VERSION "1.2.0"
 #endif
 
 #ifndef HTTPTERM_DATE
-#define HTTPTERM_DATE	"2009/04/01"
+#define HTTPTERM_DATE	"2009/01/25"
 #endif
 
 #ifndef SHUT_RD
@@ -325,8 +324,7 @@ struct buffer {
     char *r, *w, *h, *lr;     		/* read ptr, write ptr, last header ptr, last read */
     char *rlim;				/* read limit, used for header rewriting */
     unsigned long long total;		/* total data read */
-    char *data;
-    char data_buf[BUFSIZE];
+    char data[BUFSIZE];
 };
 
 struct server {
@@ -341,7 +339,6 @@ struct server {
     int resp_code;			/* expected response code */
     int resp_size;			/* expected response size in bytes */
     int resp_cache;			/* expected cacheability (0=no, 1=yes) */
-    char *resp_data;			/* response data if coming from another file */
 };
 
 /* The base for all tasks */
@@ -1527,7 +1524,7 @@ int event_cli_write(int fd) {
     else if (b->r > b->w) {
 	max = b->r - b->w;
     }
-    else // cannot happen with a file's contents
+    else
 	max = b->data + BUFSIZE - b->w;
     
     if (fdtab[fd].state != FD_STERROR) {
@@ -1536,7 +1533,7 @@ int event_cli_write(int fd) {
 	    if (s->to_write > 0) {
 		/* we'll send the buffer data, and make sure to align data according to
 		 * what was already sent. This will guarantee that all requests will get
-		 * the exact same contents. This cannot happen with a file's contents.
+		 * the exact same contents.
 		 */
 		unsigned int offset;
 		offset = (s->req_size - s->to_write) % 50;
@@ -1799,7 +1796,6 @@ int event_accept(int fd) {
 	    return 0;
 	}
 
-	s->req->data = s->req->data_buf;
 	s->req->l = 0;
 	s->req->total = 0;
 	s->req->h = s->req->r = s->req->lr = s->req->w = s->req->data;	/* r and w will be reset further */
@@ -1816,7 +1812,6 @@ int event_accept(int fd) {
 	}
 	s->rep->l = 0;
 	s->rep->total = 0;
-	s->rep->data = s->rep->data_buf;
 	s->rep->h = s->rep->r = s->rep->lr = s->rep->w = s->rep->rlim = s->rep->data;
 
 	fdtab[cfd].read  = &event_cli_read;
@@ -1943,41 +1938,30 @@ static inline void srv_return_page(struct session *t) {
     if (t->req_cache < 0)
 	t->req_cache = srv->resp_cache;
 
-    if (srv->resp_size < 0)
-	srv->resp_size = 0;
-
     if (t->req_size < 0)
 	t->req_size = srv->resp_size;
 
     if (t->req_time < 0)
 	t->req_time = srv->resp_time;
 
-    if (srv->resp_data) {
-	t->rep->data = srv->resp_data;
-	t->rep->l = srv->resp_size;
-	t->rep->r = srv->resp_data + t->rep->l;
-	t->rep->h = t->rep->lr = t->rep->w = t->rep->rlim = t->rep->data;
-	t->to_write = 0;
-    }
-    else {
-	hlen = sprintf(t->rep->data,
-		       "HTTP/1.0 %03d\r\n"
-		       "Connection: close\r\n"
-		       "%s"
-		       "X-req: size=%ld, time=%ld ms\r\n"
-		       "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
-		       "\r\n",
-		       t->req_code,
-		       t->req_cache ? "" : "Cache-Control: no-cache\r\n",
-		       (long)t->req->total, t->logs.t_request, 
-		       srv->id, t->req_code, t->req_cache,
-		       t->req_size, t->req_time,
-		       t->logs.t_queue - t->logs.t_request);
-	t->to_write = t->req_size;
-	t->rep->l = hlen;
-	t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
-	t->rep->r += hlen;
-    }
+    hlen = sprintf(t->rep->data,
+		   "HTTP/1.0 %03d\r\n"
+		   "Connection: close\r\n"
+		   "%s"
+		   "X-req: size=%ld, time=%ld ms\r\n"
+		   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
+		   "\r\n",
+		   t->req_code,
+		   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
+		   (long)t->req->total, t->logs.t_request, 
+		   srv->id, t->req_code, t->req_cache,
+		   t->req_size, t->req_time,
+		   t->logs.t_queue - t->logs.t_request);
+
+    t->to_write = t->req_size;
+    t->rep->l = hlen;
+    t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
+    t->rep->r += hlen;
     t->req->l = 0;
 }
 
@@ -2043,6 +2027,11 @@ int process_cli(struct session *t) {
 		    /* we have to wait for the response */
 		    tv_delayfrom(&t->cnexpire, &now, t->req_time);
 		    t->cli_state = CL_STWAIT;
+
+#ifdef TCP_QUICKACK
+		    /* we're going to wait, let's ACK the request */
+		    setsockopt(t->cli_fd, SOL_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
+#endif
 		    return 1;
 		}
 
@@ -3043,11 +3032,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 	Alert("parsing [%s:%d] : 'listen' or 'defaults' expected.\n", file, linenum);
 	return -1;
     }
-
-    /* ignore disabled listeners so that we don't fail on missing files */
-    if (curproxy->state == PR_STSTOPPED)
-	return 0;
-
+    
     if (!strcmp(args[0], "bind")) {  /* new listen addresses */
 	if (curproxy == &defproxy) {
 	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
@@ -3151,7 +3136,6 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 
 	newsrv->resp_cache = 1;
 	newsrv->resp_code = 200;
-	newsrv->resp_size = -1; /* not yet set */
 
 	cur_arg = 1;
 	while (*args[cur_arg]) {
@@ -3179,105 +3163,6 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 		newsrv->resp_time = atol(args[cur_arg + 1]);
 		cur_arg += 2;
 	    }
-	    else if (!strcmp(args[cur_arg], "file")) {
-		int ret, hdr, fd;
-		char *buf;
-		struct stat stat;
-
-		if (*(args[1]) == 0) {
-		    Alert("parsing [%s:%d] : <%s> expects a <file> argument.\n", file, linenum, args[0]);
-			return -1;
-		}
-
-		fd = open(args[cur_arg + 1], O_RDONLY);
-		if ((fd < 0) || (fstat(fd, &stat) < 0)) {
-			Alert("parsing [%s:%d] : error opening file <%s>.\n",
-			      file, linenum, args[cur_arg + 1]);
-			if (fd >= 0)
-				close(fd);
-			return -1;
-		}
-
-		if (newsrv->resp_size < 0 || newsrv->resp_size > stat.st_size)
-		    newsrv->resp_size = stat.st_size;
-
-		hdr = sprintf(trash,
-			       "HTTP/1.0 %03d\r\n"
-			       "Connection: close\r\n"
-			       "%s"
-			       "X-req: size=%d, time=%d ms\r\n"
-			       "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms\r\n"
-			       "\r\n",
-			       newsrv->resp_code,
-			       newsrv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
-			       newsrv->resp_size, newsrv->resp_time, 
-			       newsrv->id, newsrv->resp_code, newsrv->resp_cache,
-			       newsrv->resp_size, newsrv->resp_time);
-
-		buf = malloc(hdr + newsrv->resp_size); /* malloc() must succeed during parsing */
-		if (!buf) {
-			Alert("parsing [%s:%d] : not enough memory to read file <%s>.\n",
-			      file, linenum, args[cur_arg + 1]);
-			close(fd);
-			return -1;
-		}
-
-		memcpy(buf, trash, hdr);
-		ret = read(fd, buf + hdr, newsrv->resp_size);
-		close(fd);
-		if (ret != newsrv->resp_size) {
-			Alert("parsing [%s:%d] : error reading file <%s>.\n",
-			      file, linenum, args[cur_arg + 1]);
-			free(buf);
-			return -1;
-		}
-
-		newsrv->resp_size += hdr;
-		newsrv->resp_data = buf;
-		cur_arg += 2;
-	    }
-	    else if (!strcmp(args[cur_arg], "rawfile")) {
-		int ret, fd;
-		char *buf;
-		struct stat stat;
-
-		if (*(args[1]) == 0) {
-		    Alert("parsing [%s:%d] : <%s> expects a <file> argument.\n", file, linenum, args[0]);
-			return -1;
-		}
-
-		fd = open(args[cur_arg + 1], O_RDONLY);
-		if ((fd < 0) || (fstat(fd, &stat) < 0)) {
-			Alert("parsing [%s:%d] : error opening file <%s>.\n",
-			      file, linenum, args[cur_arg + 1]);
-			if (fd >= 0)
-				close(fd);
-			return -1;
-		}
-
-		if (newsrv->resp_size < 0 || newsrv->resp_size > stat.st_size)
-		    newsrv->resp_size = stat.st_size;
-
-		buf = malloc(newsrv->resp_size); /* malloc() must succeed during parsing */
-		if (!buf) {
-			Alert("parsing [%s:%d] : not enough memory to read file <%s>.\n",
-			      file, linenum, args[cur_arg + 1]);
-			close(fd);
-			return -1;
-		}
-
-		ret = read(fd, buf, newsrv->resp_size);
-		close(fd);
-		if (ret != newsrv->resp_size) {
-			Alert("parsing [%s:%d] : error reading file <%s>.\n",
-			      file, linenum, args[cur_arg + 1]);
-			free(buf);
-			return -1;
-		}
-
-		newsrv->resp_data = buf;
-		cur_arg += 2;
-	    }
 	    else if (!strcmp(args[cur_arg], "weight")) {
 		int w;
 		w = atol(args[cur_arg + 1]);
@@ -3290,7 +3175,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 		cur_arg += 2;
 	    }
 	    else {
-		Alert("parsing [%s:%d] : object %s only supports options 'name', 'code', 'size', 'time', 'cache', 'no-cache', 'file', 'rawfile' and 'weight'.\n",
+		Alert("parsing [%s:%d] : object %s only supports options 'name', 'code', 'size', 'time', 'cache', 'no-cache', and 'weight'.\n",
 		      file, linenum, newsrv->id);
 		return -1;
 	    }
@@ -3818,6 +3703,11 @@ int start_proxies(int verbose) {
 	
 	    /* the socket is ready */
 	    listener->fd = fd;
+
+#ifdef TCP_QUICKACK
+	    /* we don't want quick ACKs there */
+	    setsockopt(fd, SOL_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
+#endif
 
 	    /* the function for the accept() event */
 	    fdtab[fd].read  = &event_accept;
