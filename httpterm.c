@@ -2028,6 +2028,7 @@ int process_cli(struct session *t) {
 		    continue;
 		}
 
+	    end_of_request:
 		req->rlim = req->data + BUFSIZE; /* no more rewrite needed */
 		t->logs.t_request = tv_diff(&t->logs.tv_accept, &now);
 
@@ -2148,6 +2149,13 @@ int process_cli(struct session *t) {
 
 	/* end of header processing (even if incomplete) */
 
+	/* horrible hack : we're not interested in headers here anyway, so if a
+	 * request is larger than the request buffer, let's simply ignore
+	 * remaining headers and go on.
+	 */
+	if (req->l >= req->rlim - req->data)
+	    goto end_of_request;
+
 	if ((req->l < req->rlim - req->data) && ! FD_ISSET(t->cli_fd, StaticReadEvent)) {
 	    /* fd in StaticReadEvent was disabled, perhaps because of a previous buffer
 	     * full. We cannot loop here since event_cli_read will disable it only if
@@ -2160,14 +2168,10 @@ int process_cli(struct session *t) {
 		tv_eternity(&t->crexpire);
 	}
 
-	/* Since we are in header mode, if there's no space left for headers, we
-	 * won't be able to free more later, so the session will never terminate.
+	/* note that we don't care about a buffer full since we're not interested
+	 * by the request headers.
 	 */
-	if (req->l >= req->rlim - req->data) {
-	    client_retnclose(t, t->proxy->errmsg.len400, t->proxy->errmsg.msg400);
-	    return 1;
-	}
-	else if (t->res_cr == RES_ERROR || t->res_cr == RES_NULL) {
+	if (t->res_cr == RES_ERROR || t->res_cr == RES_NULL) {
 	    /* read error, or last read : give up.  */
 	    tv_eternity(&t->crexpire);
 	    fd_delete(t->cli_fd);
