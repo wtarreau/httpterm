@@ -1465,6 +1465,12 @@ int event_cli_read(int fd) {
 		b->l += ret;
 		s->res_cr = RES_DATA;
 		
+		if (s->cli_state >= CL_STWAIT) {
+		    /* drain data */
+		    b->r = b->data;
+		    b->l = 0;
+		}
+
 		if (b->r == b->data + BUFSIZE) {
 		    b->r = b->data; /* wrap around the buffer */
 		}
@@ -2050,6 +2056,9 @@ int process_cli(struct session *t) {
 		    /* we're going to wait, let's ACK the request */
 		    setsockopt(t->cli_fd, SOL_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
 #endif
+		    FD_SET(t->cli_fd, StaticReadEvent);
+		    req->lr = req->r = req->data;
+		    req->l = 0;
 		    return 1;
 		}
 
@@ -2208,8 +2217,11 @@ int process_cli(struct session *t) {
 	t->cli_state = CL_STDATA;
 	tv_eternity(&t->cnexpire);
 
-	/* FIXME: we could also drain data */
+	/* Note: we also want to drain data */
 	FD_SET(t->cli_fd, StaticWriteEvent);
+	FD_SET(t->cli_fd, StaticReadEvent);
+	req->lr = req->r = req->data;
+	req->l = 0;
 	if (t->proxy->clitimeout)
 	    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
 
