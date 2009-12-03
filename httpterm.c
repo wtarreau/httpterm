@@ -2040,6 +2040,8 @@ int process_cli(struct session *t) {
 		t->logs.t_request = tv_diff(&t->logs.tv_accept, &now);
 
 		t->srv = get_server_rr(t->proxy);
+		if (!t->srv)
+		    goto terminate_client;
 		t->srv->cur_sess++;
 
 		tv_eternity(&t->crexpire);
