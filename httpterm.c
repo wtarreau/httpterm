@@ -104,9 +104,10 @@
 #define BUFSIZE		4096
 #endif
 
-// reserved buffer space for header rewriting
+// reserved buffer space for header rewriting. Must not be zero
+// otherwise some requests don't get parsed !
 #ifndef MAXREWRITE
-#define MAXREWRITE	0
+#define MAXREWRITE	1
 #endif
 
 #ifndef RESPSIZE
