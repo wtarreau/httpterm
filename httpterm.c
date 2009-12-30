@@ -1968,13 +1968,15 @@ static inline void srv_return_page(struct session *t) {
     }
     else {
 	hlen = sprintf(t->rep->data,
-		       "HTTP/1.0 %03d\r\n"
+		       "HTTP/1.1 %03d\r\n"
 		       "Connection: close\r\n"
+		       "Content-length: %d\r\n"
 		       "%s"
 		       "X-req: size=%ld, time=%ld ms\r\n"
 		       "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
 		       "\r\n",
 		       t->req_code,
+		       t->req_size,
 		       t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 		       (long)t->req->total, t->logs.t_request, 
 		       srv->id, t->req_code, t->req_cache,
@@ -3227,13 +3229,15 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 		    newsrv->resp_size = stat.st_size;
 
 		hdr = sprintf(trash,
-			       "HTTP/1.0 %03d\r\n"
+			       "HTTP/1.1 %03d\r\n"
 			       "Connection: close\r\n"
+			       "Content-length: %d\r\n"
 			       "%s"
 			       "X-req: size=%d, time=%d ms\r\n"
 			       "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms\r\n"
 			       "\r\n",
 			       newsrv->resp_code,
+			       newsrv->resp_size,
 			       newsrv->resp_cache ? "" : "Cache-Control: no-cache\r\n",
 			       newsrv->resp_size, newsrv->resp_time, 
 			       newsrv->id, newsrv->resp_code, newsrv->resp_cache,
