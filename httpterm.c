@@ -2980,6 +2980,8 @@ void init_default_instance() {
     memset(&defproxy, 0, sizeof(defproxy));
     defproxy.state = PR_STNEW;
     defproxy.maxconn = cfg_maxconn ? cfg_maxconn : global.maxconn;
+    if (!defproxy.maxconn)
+	defproxy.maxconn = DEFAULT_MAXCONN;
 }
 
 /*
