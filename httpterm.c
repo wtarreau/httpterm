@@ -622,7 +622,7 @@ void display_version() {
 void usage(char *name) {
     display_version();
     fprintf(stderr,
-	    "Usage : %s -f <cfgfile> [ -vdV"
+	    "Usage : %s [-f <cfgfile>] [ -vdV"
 	    "D ] [ -n <maxconn> ] [ -N <maxpconn> ]\n"
 	    "        [ -p <pidfile> ] [ -m <max megs> ]\n"
 	    "        -v displays version\n"
@@ -643,6 +643,7 @@ void usage(char *name) {
 #endif
 	    "        -L [<ip>]:<port> adds a listener with one server\n"
 	    "        -sf/-st [pid ]* finishes/terminates old pids. Must be last arguments.\n"
+	    "        At least one of -f or -L is required.\n"
 	    "\n",
 	    name, DEFAULT_MAXCONN, cfg_maxpconn);
     exit(1);
@@ -3337,12 +3338,12 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 
 /*
  * This function reads and parses the configuration file given in the argument.
- * returns 0 if OK, -1 if error.
+ * returns 0 if OK, -1 if error. If the file is NULL, it is ignored.
  */
 int readcfgfile(char *file) {
     char thisline[256];
     char *line;
-    FILE *f;
+    FILE *f = NULL;
     int linenum = 0;
     char *end;
     char *args[MAX_LINE_ARGS];
@@ -3353,12 +3354,12 @@ int readcfgfile(char *file) {
     struct proxy *curproxy = NULL;
     struct server *newsrv = NULL;
 
-    if ((f=fopen(file,"r")) == NULL)
+    if (file && (f=fopen(file,"r")) == NULL)
 	return -1;
 
     init_default_instance();
 
-    while (fgets(line = thisline, sizeof(thisline), f) != NULL) {
+    while (f && fgets(line = thisline, sizeof(thisline), f) != NULL) {
 	linenum++;
 
 	end = line + strlen(line);
@@ -3461,7 +3462,8 @@ int readcfgfile(char *file) {
 	    
 	    
     }
-    fclose(f);
+    if (f)
+	fclose(f);
 
     /* Maybe the user has specified a listener on the command line */
     if (cmdline_listen) {
@@ -3699,7 +3701,7 @@ void init(int argc, char **argv) {
 		  (arg_mode & (MODE_DAEMON | MODE_FOREGROUND | MODE_VERBOSE
 			       | MODE_QUIET | MODE_CHECK | MODE_DEBUG));
 
-    if (!cfg_cfgfile)
+    if (!cfg_cfgfile && !cmdline_listen)
 	usage(old_argv);
 
     gethostname(hostname, MAX_HOSTNAME_LEN);
