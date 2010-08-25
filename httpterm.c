@@ -2101,6 +2101,7 @@ int process_cli(struct session *t) {
 
 	    /* right now we have a full header line */
 	    if (!t->uri) {
+		char *next;
 		t->uri = req->h;
 		*ptr = '\0';
 
@@ -2108,11 +2109,12 @@ int process_cli(struct session *t) {
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
 		 * /? to get the help page.
 		 */
-		if (!memcmp(t->uri, "GET /?", 6)) {
-		    char *arg, *next;
+		if ((next = strstr(t->uri, "/?")) != NULL) {
+		    char *arg;
 		    long result, mult;
 
-		    next = arg = t->uri + 6;
+		    next += 2;
+		    arg = next;
 		    if (next == ptr || *next == ' ') {
 			client_retnclose(t, strlen(HTTP_HELP), HTTP_HELP);
 			return 1;
