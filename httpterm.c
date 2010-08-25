@@ -818,7 +818,7 @@ struct listener *str2listener(char *str, struct listener *tail) {
 
 	str = next;
 	/* 1) look for the end of the first address */
-	if ((next = strrchr(str, ',')) != NULL) {
+	if ((next = strchr(str, ',')) != NULL) {
 	    *next++ = 0;
 	}
 
@@ -3468,8 +3468,13 @@ int readcfgfile(char *file) {
 	const char *name = "command line";
 	args[0] = "listen";
 	args[1] = "dummy";
-	args[2] = cmdline_listen;
-	args[3] = "\0";
+	args[2] = "\0";
+	if (cfg_parse_listen(name, 0, args) < 0)
+	    return -1;
+
+	args[0] = "bind";
+	args[1] = cmdline_listen;
+	args[2] = "\0";
 	if (cfg_parse_listen(name, 0, args) < 0)
 	    return -1;
 
