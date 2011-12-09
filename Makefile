@@ -6,8 +6,9 @@ VERSION := 1.6.2
 
 # Select target OS. TARGET must match a system for which COPTS and LIBS are
 # correctly defined below.
+TARGET = linux26s
 #TARGET = linux26
-TARGET = linux24
+#TARGET = linux24
 #TARGET = linux24e
 #TARGET = linux22
 #TARGET = solaris
@@ -21,6 +22,10 @@ CPU = generic
 # tools options
 CC = gcc
 LD = gcc
+
+# This is for recent Linux 2.6 with splice
+COPTS.linux26s = -DENABLE_POLL -DENABLE_EPOLL -DENABLE_SPLICE
+LIBS.linux26s =
 
 # This is for standard Linux 2.6 with epoll()
 COPTS.linux26 = -DENABLE_POLL -DENABLE_EPOLL

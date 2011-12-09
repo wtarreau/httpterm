@@ -56,6 +56,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #if defined(__dietlibc__)
 #include <strings.h>
@@ -89,6 +90,50 @@
 
 #ifndef SHUT_WR
 #define SHUT_WR		1
+#endif
+
+#ifdef ENABLE_SPLICE
+#ifndef F_SETPIPE_SZ
+#define F_SETPIPE_SZ (1024 + 7)
+#endif
+
+#ifndef __NR_splice
+#if defined(__x86_64__)
+#define __NR_splice             275
+#define __NR_tee                276
+#define __NR_vmsplice           278
+#elif defined (__i386__)
+#define __NR_splice             313
+#define __NR_tee                315
+#define __NR_vmsplice           316
+#elif defined (__arm__)
+#define __NR_splice             340
+#define __NR_tee                342
+#define __NR_vmsplice           343
+#endif /* $arch */
+#endif /* __NR_splice */
+
+#ifndef SPLICE_F_NONBLOCK
+#define SPLICE_F_MOVE     1
+#define SPLICE_F_NONBLOCK 2
+#define SPLICE_F_MORE     4
+
+#ifndef _syscall4
+#define _syscall4(tr, nr, t1, n1, t2, n2, t3, n3, t4, n4)  \
+        inline tr nr(t1 n1, t2 n2, t3 n3, t4 n4) {         \
+                return syscall(__NR_##nr, n1, n2, n3, n4); \
+        }
+#endif
+#ifndef _syscall6
+#define _syscall6(tr, nr, t1, n1, t2, n2, t3, n3, t4, n4, t5, n5, t6, n6) \
+        inline tr nr(t1 n1, t2 n2, t3 n3, t4 n4, t5 n5, t6 n6) {          \
+                return syscall(__NR_##nr, n1, n2, n3, n4, n5, n6);        \
+        }
+#endif
+static _syscall6(int, splice, int, fdin, loff_t *, off_in, int, fdout, loff_t *, off_out, size_t, len, unsigned long, flags);
+static _syscall4(long, vmsplice, int, fd, const struct iovec *, iov, unsigned long, nr_segs, unsigned int, flags);
+static _syscall4(long, tee, int, fd_in, int, fd_out, size_t, len, unsigned int, flags);
+#endif
 #endif
 
 /*
@@ -442,9 +487,14 @@ char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
 int  pid;			/* current process id */
 char *cmdline_listen = NULL;	/* command-line listen address (ip:port) */
+int master_pipe[2], slave_pipe[2]; /* pipes used by splice() */
+int slave_pipe_usage = 0;
+int pipesize = RESPSIZE;
 
 /* send zeroes instead of aligned data */
 #define GFLAGS_SEND_ZERO	0x1
+/* don't use splice */
+#define GFLAGS_NO_SPLICE	0x2
 
 /* global options */
 static struct {
@@ -640,6 +690,9 @@ void usage(char *name) {
 #endif
 #if defined(ENABLE_POLL)
 	    "        -dp disables poll() usage even when available\n"
+#endif
+#if defined(ENABLE_SPLICE)
+	    "        -dS disables splice() usage even when available\n"
 #endif
 	    "        -L [<ip>]:<port> adds a listener with one server\n"
 	    "        -sf/-st [pid ]* finishes/terminates old pids. Must be last arguments.\n"
@@ -1574,7 +1627,30 @@ int event_cli_write(int fd) {
 		ret = send(fd, data_ptr, max, MSG_DONTWAIT);
 	}
 #else
-	ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL);
+	ret = max;
+#ifdef ENABLE_SPLICE
+	if (!b->l && !(global.flags & GFLAGS_NO_SPLICE)) {
+	    /* dummy data only */
+
+	    if (slave_pipe_usage < s->to_write) {
+		ret = tee(master_pipe[0], slave_pipe[1], pipesize, SPLICE_F_NONBLOCK);
+		if (ret > 0)
+		    slave_pipe_usage += ret;
+		ret = max;
+	    }
+
+	    if (slave_pipe_usage) {
+		/* we need to release data from the pipe before calling tee() */
+		ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK);
+		if (ret > 0) {
+		    slave_pipe_usage -= ret;
+		    max = 0;
+		}
+	    }
+	}
+#endif
+	if (max && ret)
+	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL);
 #endif
 
 	if (ret > 0) {
@@ -2876,6 +2952,9 @@ int cfg_parse_global(char *file, int linenum, char **args) {
     else if (!strcmp(args[0], "sendzero")) {
 	global.flags |= GFLAGS_SEND_ZERO;
     }
+    else if (!strcmp(args[0], "nosplice")) {
+	global.flags |= GFLAGS_NO_SPLICE;
+    }
     else if (!strcmp(args[0], "noepoll")) {
 	cfg_polling_mechanism &= ~POLL_USE_EPOLL;
     }
@@ -2970,6 +3049,13 @@ int cfg_parse_global(char *file, int linenum, char **args) {
 	    return -1;
 	}
 	global.pidfile = strdup(args[1]);
+    }
+    else if (!strcmp(args[0], "pipesize")) {
+	if (*(args[1]) == 0) {
+	    Alert("parsing [%s:%d] : '%s' expects an integer argument.\n", file, linenum, args[0]);
+	    return -1;
+	}
+	pipesize = atol(args[1]);
     }
     else {
 	Alert("parsing [%s:%d] : unknown keyword '%s' in '%s' section\n", file, linenum, args[0], "global");
@@ -3666,6 +3752,10 @@ void init(int argc, char **argv) {
 	    else if (*flag == 'd' && flag[1] == 'p')
 		cfg_polling_mechanism &= ~POLL_USE_POLL;
 #endif
+#if defined(ENABLE_SPLICE)
+	    else if (*flag == 'd' && flag[1] == 'S')
+		global.flags |= GFLAGS_NO_SPLICE;
+#endif
 	    else if (*flag == 'V')
 		arg_mode |= MODE_VERBOSE;
 	    else if (*flag == 'd' && flag[1] == 'b')
@@ -3778,6 +3868,40 @@ void init(int argc, char **argv) {
     for (i = 0; i < global.maxsock; i++) {
 	fdtab[i].state = FD_STCLOSE;
     }
+
+#ifdef ENABLE_SPLICE
+    if (!(global.flags & GFLAGS_NO_SPLICE)) {
+	struct iovec v = { .iov_base = common_response,
+			   .iov_len = sizeof(common_response) };
+	int total, ret;
+
+	if (pipe(master_pipe) < 0 || pipe(slave_pipe) < 0) {
+	    Alert("Failed to create pipes for splice\n");
+	    exit(1);
+	}
+	    
+	fcntl(master_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
+	fcntl(slave_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
+	    
+	total = ret = 0;
+	do {
+	    ret = vmsplice(master_pipe[1], &v, 1, SPLICE_F_NONBLOCK);
+	    if (ret > 0)
+		total += ret;
+	} while (ret > 0 && total < pipesize);
+
+	if (total < pipesize) {
+	    if (total < 60*1024) {
+		/* Older kernels were limited to around 60-61 kB */
+		Alert("Failed to vmsplice response buffer after %d bytes, retry with '-dS'\n", total);
+		exit(1);
+	    } else {
+		Warning("Splicing is limited to %d bytes (too old kernel), retry with '-dS'\n", total);
+		pipesize = total;
+	    }
+	}
+    }
+#endif
 }
 
 /*
@@ -3962,9 +4086,7 @@ int main(int argc, char **argv) {
     /* on very high loads, a sigpipe sometimes happen just between the
      * getsockopt() which tells "it's OK to write", and the following write :-(
      */
-#ifndef MSG_NOSIGNAL
     signal(SIGPIPE, SIG_IGN);
-#endif
 
     /* We will loop at most 100 times with 10 ms delay each time.
      * That's at most 1 second. We only send a signal to old pids
