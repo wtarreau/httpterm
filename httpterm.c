@@ -1646,6 +1646,10 @@ int event_cli_write(int fd) {
 		    slave_pipe_usage -= ret;
 		    max = 0;
 		}
+		else if (ret < 0 && errno == EAGAIN) {
+		    /* Output buffer is full, ensure we don't try again with send() */
+		    max = 0;
+		}
 	    }
 	}
 #endif
