@@ -77,11 +77,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HTTPTERM_VERSION
-#define HTTPTERM_VERSION "1.7.0"
+#define HTTPTERM_VERSION "1.7.1"
 #endif
 
 #ifndef HTTPTERM_DATE
-#define HTTPTERM_DATE	"2011/12/09"
+#define HTTPTERM_DATE	"2012/01/10"
 #endif
 
 #ifndef SHUT_RD
