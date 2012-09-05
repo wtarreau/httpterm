@@ -674,7 +674,7 @@ void usage(char *name) {
     fprintf(stderr,
 	    "Usage : %s [-f <cfgfile>] [ -vdV"
 	    "D ] [ -n <maxconn> ] [ -N <maxpconn> ]\n"
-	    "        [ -p <pidfile> ] [ -m <max megs> ]\n"
+	    "        [ -p <pidfile> ] [ -m <max megs> ] [ -P <pipesize in kB> ]\n"
 	    "        -v displays version\n"
 	    "        -d enters debug mode ; -db only disables background mode.\n"
 	    "        -V enters verbose mode (disables quiet mode)\n"
@@ -693,6 +693,7 @@ void usage(char *name) {
 #endif
 #if defined(ENABLE_SPLICE)
 	    "        -dS disables splice() usage even when available\n"
+	    "        -P sets splice pipe size in kB\n"
 #endif
 	    "        -L [<ip>]:<port> adds a listener with one server\n"
 	    "        -sf/-st [pid ]* finishes/terminates old pids. Must be last arguments.\n"
@@ -3784,6 +3785,9 @@ void init(int argc, char **argv) {
 		case 'f' : cfg_cfgfile = *argv; break;
 		case 'p' : cfg_pidfile = *argv; break;
 		case 'L' : cmdline_listen = *argv; break;
+#if defined(ENABLE_SPLICE)
+		case 'P' : pipesize = atol(*argv) * 1024; break;
+#endif
 		default: usage(old_argv);
 		}
 	    }
