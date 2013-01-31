@@ -360,6 +360,9 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define ERR_RETRYABLE	1	/* retryable error, may be cumulated */
 #define ERR_FATAL	2	/* fatal error, may be cumulated */
 
+static char chunk_pattern[] = "1\r\n";
+#define CHUNK_LEN (sizeof(chunk_pattern)-1)
+
 /*********************************************************************/
 
 #define LIST_HEAD(a)	((void *)(&(a)))
@@ -427,6 +430,7 @@ struct session {
     char *uri;				/* the requested URI within the buffer */
     int req_code, req_size;		/* values passed in the URI to override the server's */
     int req_cache, req_time;
+    int req_chunked;
 };
 
 struct listener {
@@ -479,6 +483,13 @@ struct fdtab {
     int state;			/* the state of this fd */
 };
 
+struct pipe {
+    int pipe[2];
+    int start_alignment;
+    int stop_alignment;
+    int usage;
+};
+
 /*********************************************************************/
 
 int cfg_maxpconn = DEFAULT_MAXCONN;	/* # of simultaneous connections per proxy (-N) */
@@ -487,8 +498,9 @@ char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
 int  pid;			/* current process id */
 char *cmdline_listen = NULL;	/* command-line listen address (ip:port) */
-int master_pipe[2], slave_pipe[2]; /* pipes used by splice() */
+int master_pipe[2], chunked_pipe[CHUNK_LEN][2], slave_pipe[2]; /* pipes used by splice() */
 int slave_pipe_usage = 0;
+struct pipe chunk_slave_pipe[CHUNK_LEN];
 int pipesize = RESPSIZE;
 
 /* send zeroes instead of aligned data */
@@ -557,6 +569,7 @@ static fd_set *PrevReadEvent = NULL, *PrevWriteEvent = NULL;
 /* this is used to drain data, and as a temporary buffer for sprintf()... */
 static char trash[BUFSIZE];
 static char common_response[RESPSIZE];
+static char common_chunk_resp[RESPSIZE];
 
 const int zero = 0;
 const int one = 1;
@@ -641,6 +654,8 @@ const char *HTTP_HELP =
 	"  set the return as <b>not cacheable if zero</b>.          Eg: /?c=0\n"
 	"<li> /?t=&lt;<b>time</b>&gt;      :\n"
 	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
+	"<li> /?k=<b>{0|1}</b>             :\n"
+	"  Enable transfer enconding chunked with 1 byte chunks\n"
 	"</ul>\n"
 	"Note that those arguments may be cumulated on one line separated by\n"
 	" the '<b>&amp;</b>' sign :<br><ul>\n"
@@ -1601,11 +1616,27 @@ int event_cli_write(int fd) {
 		 * the exact same contents. This cannot happen with a file's contents.
 		 */
 		unsigned int offset;
-		offset = (s->req_size - s->to_write) % 50;
-		data_ptr = common_response + offset;
+		char *buffer;
+		size_t buffer_len;
+		int modulo;
+
+		if (s->req_chunked) {
+		    buffer = common_chunk_resp;
+		    buffer_len = sizeof(common_chunk_resp);
+		    modulo = CHUNK_LEN;
+		}
+		else {
+		    buffer = common_response;
+		    buffer_len = sizeof(common_response);
+		    modulo = 50;
+		}
+
+		offset = (s->req_size - s->to_write) % modulo;
+		data_ptr = buffer + offset;
 		max = s->to_write;
-		if (max > sizeof(common_response) - offset)
-		    max = sizeof(common_response) - offset;
+		if (max > buffer_len - offset)
+		    max = buffer_len - offset;
+
 	    } else {
 		if (s->res_cw != RES_DATA)
 		    s->res_cw = RES_NULL;
@@ -1632,24 +1663,98 @@ int event_cli_write(int fd) {
 #ifdef ENABLE_SPLICE
 	if (!b->l && !(global.flags & GFLAGS_NO_SPLICE)) {
 	    /* dummy data only */
+	    if (!s->req_chunked) {
 
-	    if (slave_pipe_usage < s->to_write) {
-		ret = tee(master_pipe[0], slave_pipe[1], pipesize, SPLICE_F_NONBLOCK);
-		if (ret > 0)
-		    slave_pipe_usage += ret;
-		ret = max;
+		if (slave_pipe_usage < s->to_write) {
+		    ret = tee(master_pipe[0], slave_pipe[1], pipesize, SPLICE_F_NONBLOCK);
+		    if (ret > 0)
+			slave_pipe_usage += ret;
+		    ret = max;
+		}
+
+		if (slave_pipe_usage) {
+		    /* we need to release data from the pipe before calling tee() */
+		    ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|SPLICE_F_MORE);
+		    if (ret > 0) {
+			slave_pipe_usage -= ret;
+			max = 0;
+		    }
+		    else if (ret < 0 && errno == EAGAIN) {
+			/* Output buffer is full, ensure we don't try again with send() */
+			max = 0;
+		    }
+		}
 	    }
 
-	    if (slave_pipe_usage) {
-		/* we need to release data from the pipe before calling tee() */
-		ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|SPLICE_F_MORE);
-		if (ret > 0) {
-		    slave_pipe_usage -= ret;
-		    max = 0;
+	    /* dummy chunked data */
+	    else {
+		int align;
+		int shift;
+		struct pipe *p = NULL;
+		int i;
+		char buf[3];
+		struct pipe *not_found = NULL;
+		char all_align[CHUNK_LEN];
+
+		align = (s->req_size - s->to_write) % CHUNK_LEN;
+
+	        /* search aligned pipe */
+		memset(all_align, 0, sizeof(char) * CHUNK_LEN);
+		for (i=0; i<CHUNK_LEN; i++) {
+		    if (chunk_slave_pipe[i].start_alignment == align) {
+			p = &chunk_slave_pipe[i];
+			break;
+		    }
+		    all_align[chunk_slave_pipe[i].start_alignment]++;
+		    if (all_align[chunk_slave_pipe[i].start_alignment] > 1)
+			not_found = &chunk_slave_pipe[i];
 		}
-		else if (ret < 0 && errno == EAGAIN) {
-		    /* Output buffer is full, ensure we don't try again with send() */
-		    max = 0;
+
+		/* if not aligned pipe found then adjust other pipe.
+		 * "not_found" cannot be NULL.
+		 */
+		if (!p) {
+		    p = not_found;
+		    shift = align - p->start_alignment;
+		    if (shift < 0)
+			shift += CHUNK_LEN;
+		    if (p->usage == 0) {
+			p->stop_alignment = align;
+		    }
+		    else if (p->usage < shift) { /* reset */
+			read(p->pipe[0], buf, p->usage);
+			p->usage = 0;
+			p->stop_alignment = align;
+		    }
+		    else {
+			read(p->pipe[0], buf, shift);
+			p->usage -= shift;
+		    }
+		    p->start_alignment = align;
+		}
+
+		/* fill data if needed */
+		if (p->usage < s->to_write) {
+		    ret = tee(chunked_pipe[p->stop_alignment][0], p->pipe[1], pipesize,
+		              SPLICE_F_NONBLOCK);
+		    if (ret > 0) {
+			p->usage += ret;
+			p->stop_alignment = ( p->stop_alignment + ret ) % CHUNK_LEN;
+		    }
+		}
+
+		if (p->usage) {
+		    /* left the final 3 octet 0\r\n */
+		    ret = splice(p->pipe[0], NULL, fd, NULL, s->to_write - 3, SPLICE_F_NONBLOCK|SPLICE_F_MORE);
+		    if (ret > 0) {
+			p->usage -= ret;
+			max = 0;
+			p->start_alignment = ( p->start_alignment + ret ) % CHUNK_LEN;
+		    }
+		    else if (ret < 0 && errno == EAGAIN) {
+			/* Output buffer is full, ensure we don't try again with send() */
+			max = 0;
+		    }
 		}
 	    }
 	}
@@ -1670,6 +1775,16 @@ int event_cli_write(int fd) {
 	    } else {
 		/* we were working on dummy data */
 		s->to_write -= ret;
+
+		/* in chunked mode, switch to "standard" data for sending
+		 * the 3 final digits
+		 */
+		if (s->to_write == 3) {
+		    s->to_write = 0;
+		    s->rep->l = 3;
+		    s->rep->r = s->rep->h = s->rep->lr = s->rep->w = "0\r\n";
+		    s->rep->r += 3;
+		}
 	    }
 	    
 	    s->res_cw = RES_DATA;
@@ -1842,6 +1957,7 @@ int event_accept(int fd) {
 	s->srv = NULL;
 	s->uri = NULL;
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
+	s->req_chunked = 0;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2049,21 +2165,39 @@ static inline void srv_return_page(struct session *t) {
 	t->to_write = 0;
     }
     else {
-	hlen = sprintf(t->rep->data,
-		       "HTTP/1.1 %03d\r\n"
-		       "Connection: close\r\n"
-		       "Content-length: %d\r\n"
-		       "%s"
-		       "X-req: size=%ld, time=%ld ms\r\n"
-		       "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
-		       "\r\n",
-		       t->req_code,
-		       t->req_size,
-		       t->req_cache ? "" : "Cache-Control: no-cache\r\n",
-		       (long)t->req->total, t->logs.t_request, 
-		       srv->id, t->req_code, t->req_cache,
-		       t->req_size, t->req_time,
-		       t->logs.t_queue - t->logs.t_request);
+	if (!t->req_chunked) {
+	    hlen = sprintf(t->rep->data,
+			   "HTTP/1.1 %03d\r\n"
+			   "Connection: close\r\n"
+			   "Content-length: %d\r\n"
+			   "%s"
+			   "X-req: size=%ld, time=%ld ms\r\n"
+			   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
+			   "\r\n",
+			   t->req_code,
+			   t->req_size,
+			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
+			   (long)t->req->total, t->logs.t_request,
+			   srv->id, t->req_code, t->req_cache,
+			   t->req_size, t->req_time,
+			   t->logs.t_queue - t->logs.t_request);
+	}
+	else {
+	    hlen = sprintf(t->rep->data,
+			   "HTTP/1.1 %03d\r\n"
+			   "Connection: close\r\n"
+			   "Transfer-Encoding: chunked\r\n"
+			   "%s"
+			   "X-req: size=%ld, time=%ld ms\r\n"
+			   "X-rsp: id=%s, code=%d, cache=%d, chunked, size=%d, time=%d ms (%ld real)\r\n"
+			   "\r\n",
+			   t->req_code,
+			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
+			   (long)t->req->total, t->logs.t_request,
+			   srv->id, t->req_code, t->req_cache,
+			   t->req_size, t->req_time,
+			   t->logs.t_queue - t->logs.t_request);
+	}
 	t->to_write = t->req_size;
 	t->rep->l = hlen;
 	t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
@@ -2230,6 +2364,9 @@ int process_cli(struct session *t) {
 			    case 'c':
 				t->req_cache = result << mult;
 				break;
+			    case 'k':
+				t->req_chunked = result;
+				break;
 			    }
 			    arg = next;
 			}
@@ -2238,6 +2375,13 @@ int process_cli(struct session *t) {
 			else
 			    break;
 		    }
+
+		    /* when chunk mode is required, the size is adjusted by the
+		     * chunk encoding overhead. each chunk contain 1 data byte.
+		     * the final 3 bytes are for the "0\r\n"
+		     */
+		    if (t->req_chunked)
+			t->req_size = t->req_size * (CHUNK_LEN * 2) + 3;
 		}
 	    }
 
@@ -3827,6 +3971,10 @@ void init(int argc, char **argv) {
 	    else
 		common_response[i] = '0' + i % 10;
 	}
+
+	/* fill the common chunked response with chunk data */
+	for (i = 0; i < sizeof(common_chunk_resp); i++)
+	    common_chunk_resp[i] = chunk_pattern[i % CHUNK_LEN];
     }
 
     if (cfg_maxconn > 0)
@@ -3907,6 +4055,35 @@ void init(int argc, char **argv) {
 		Warning("Splicing is limited to %d bytes (too old kernel), retry with '-dS'\n", total);
 		pipesize = total;
 	    }
+	}
+
+	/* initialize and fill pipes for the chunked mode */
+
+	for (i=0; i<CHUNK_LEN; i++) {
+	    if (pipe(chunked_pipe[i]) < 0) {
+		Alert("Failed to create pipes for splice\n");
+		exit(1);
+	    }
+	    fcntl(chunked_pipe[i][0], F_SETPIPE_SZ, pipesize * 5 / 4);
+
+	    if (pipe(chunk_slave_pipe[i].pipe) < 0) {
+		Alert("Failed to create pipes for splice\n");
+		exit(1);
+	    }
+	    fcntl(chunk_slave_pipe[i].pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
+
+	    chunk_slave_pipe[i].start_alignment = 0;
+	    chunk_slave_pipe[i].stop_alignment = 0;
+	    chunk_slave_pipe[i].usage = 0;
+
+	    v.iov_base = common_chunk_resp + i;
+	    v.iov_len = sizeof(common_chunk_resp) / CHUNK_LEN * CHUNK_LEN - CHUNK_LEN;
+	    total = ret = 0;
+	    do {
+		ret = vmsplice(chunked_pipe[i][1], &v, 1, SPLICE_F_NONBLOCK);
+		if (ret > 0)
+		    total += ret;
+	    } while (ret > 0 && total < pipesize);
 	}
     }
 #endif
