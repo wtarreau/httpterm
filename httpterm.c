@@ -92,6 +92,19 @@
 #define SHUT_WR		1
 #endif
 
+/* We'll try to enable SO_REUSEPORT on Linux 2.4 and 2.6 if not defined.
+ * There are two families of values depending on the architecture. Those
+ * are at least valid on Linux 2.4 and 2.6, reason why we'll rely on the
+ * NETFILTER define.
+ */
+#if !defined(SO_REUSEPORT) && defined(__linux__)
+#if    (SO_REUSEADDR == 2)
+#define SO_REUSEPORT 15
+#elif  (SO_REUSEADDR == 0x0004)
+#define SO_REUSEPORT 0x0200
+#endif /* SO_REUSEADDR */
+#endif /* SO_REUSEPORT */
+
 #ifdef ENABLE_SPLICE
 #ifndef F_SETPIPE_SZ
 #define F_SETPIPE_SZ (1024 + 7)
@@ -4140,7 +4153,12 @@ int start_proxies(int verbose) {
 		Alert("cannot do so_reuseaddr for proxy %s. Continuing.\n",
 		      curproxy->id);
 	    }
-	
+
+	    /* this one may silently fail */
+#ifdef SO_REUSEPORT
+	    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (char *) &one, sizeof(one));
+#endif
+
 	    if (bind(fd,
 		     (struct sockaddr *)&listener->addr,
 		     listener->addr.ss_family == AF_INET6 ?
