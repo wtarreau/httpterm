@@ -3852,6 +3852,53 @@ int readcfgfile(char *file) {
 	return 0;
 }
 
+#ifdef ENABLE_SPLICE
+void init_splice()
+{
+    int i;
+    struct iovec v = { .iov_base = common_response,
+		       .iov_len = sizeof(common_response) };
+    int total, ret;
+
+    if (global.flags & GFLAGS_NO_SPLICE)
+	return;
+
+    if (pipe(slave_pipe) < 0) {
+	Alert("Failed to create pipes for splice\n");
+	exit(1);
+    }
+
+    fcntl(slave_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
+
+    /* initialize and fill pipes for the chunked mode */
+    for (i=0; i<CHUNK_LEN; i++) {
+	if (pipe(chunked_pipe[i]) < 0) {
+	    Alert("Failed to create pipes for splice\n");
+	    exit(1);
+	}
+	fcntl(chunked_pipe[i][0], F_SETPIPE_SZ, pipesize * 5 / 4);
+
+	if (pipe(chunk_slave_pipe[i].pipe) < 0) {
+	    Alert("Failed to create pipes for splice\n");
+	    exit(1);
+	}
+	fcntl(chunk_slave_pipe[i].pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
+
+	chunk_slave_pipe[i].start_alignment = 0;
+	chunk_slave_pipe[i].stop_alignment = 0;
+	chunk_slave_pipe[i].usage = 0;
+
+	v.iov_base = common_chunk_resp + i;
+	v.iov_len = sizeof(common_chunk_resp) / CHUNK_LEN * CHUNK_LEN - CHUNK_LEN;
+	total = ret = 0;
+	do {
+	    ret = vmsplice(chunked_pipe[i][1], &v, 1, SPLICE_F_NONBLOCK);
+	    if (ret > 0)
+		total += ret;
+	} while (ret > 0 && total < pipesize);
+    }
+}
+#endif
 
 /*
  * This function initializes all the necessary variables. It only returns
@@ -4044,14 +4091,13 @@ void init(int argc, char **argv) {
 			   .iov_len = sizeof(common_response) };
 	int total, ret;
 
-	if (pipe(master_pipe) < 0 || pipe(slave_pipe) < 0) {
-	    Alert("Failed to create pipes for splice\n");
+	if (pipe(master_pipe) < 0) {
+	    Alert("Failed to create master pipe for splice\n");
 	    exit(1);
 	}
-	    
+
 	fcntl(master_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
-	fcntl(slave_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
-	    
+
 	total = ret = 0;
 	do {
 	    ret = vmsplice(master_pipe[1], &v, 1, SPLICE_F_NONBLOCK);
@@ -4068,35 +4114,6 @@ void init(int argc, char **argv) {
 		Warning("Splicing is limited to %d bytes (too old kernel), retry with '-dS'\n", total);
 		pipesize = total;
 	    }
-	}
-
-	/* initialize and fill pipes for the chunked mode */
-
-	for (i=0; i<CHUNK_LEN; i++) {
-	    if (pipe(chunked_pipe[i]) < 0) {
-		Alert("Failed to create pipes for splice\n");
-		exit(1);
-	    }
-	    fcntl(chunked_pipe[i][0], F_SETPIPE_SZ, pipesize * 5 / 4);
-
-	    if (pipe(chunk_slave_pipe[i].pipe) < 0) {
-		Alert("Failed to create pipes for splice\n");
-		exit(1);
-	    }
-	    fcntl(chunk_slave_pipe[i].pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
-
-	    chunk_slave_pipe[i].start_alignment = 0;
-	    chunk_slave_pipe[i].stop_alignment = 0;
-	    chunk_slave_pipe[i].usage = 0;
-
-	    v.iov_base = common_chunk_resp + i;
-	    v.iov_len = sizeof(common_chunk_resp) / CHUNK_LEN * CHUNK_LEN - CHUNK_LEN;
-	    total = ret = 0;
-	    do {
-		ret = vmsplice(chunked_pipe[i][1], &v, 1, SPLICE_F_NONBLOCK);
-		if (ret > 0)
-		    total += ret;
-	    } while (ret > 0 && total < pipesize);
 	}
     }
 #endif
@@ -4433,6 +4450,10 @@ int main(int argc, char **argv) {
 	pid = getpid(); /* update child's pid */
 	setsid();
     }
+
+#ifdef ENABLE_SPLICE
+    init_splice();
+#endif
 
 #if defined(ENABLE_EPOLL)
     if (cfg_polling_mechanism & POLL_USE_EPOLL) {
