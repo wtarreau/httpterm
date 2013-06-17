@@ -763,7 +763,7 @@ void Warning(char *fmt, ...) {
     struct timeval tv;
     struct tm *tm;
 
-    if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
+    if (!(global.mode & MODE_QUIET) || (global.mode & (MODE_VERBOSE | MODE_STARTING))) {
 	va_start(argp, fmt);
 
 	gettimeofday(&tv, NULL);
