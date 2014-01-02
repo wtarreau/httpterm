@@ -3405,7 +3405,6 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
     }
     else if (!strcmp(args[0], "object")) {
 	int cur_arg;
-	int do_check;
 
 	if (curproxy == &defproxy) {
 	    Alert("parsing [%s:%d] : '%s' not allowed in 'defaults' section.\n", file, linenum, args[0]);
@@ -3426,8 +3425,6 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
 	newsrv->next = curproxy->srv;
 	curproxy->srv = newsrv;
 	newsrv->proxy = curproxy;
-
-	do_check = 0;
 
 	newsrv->resp_cache = 1;
 	newsrv->resp_code = 200;
