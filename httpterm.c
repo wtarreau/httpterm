@@ -452,6 +452,7 @@ struct session {
     int req_code, req_size;		/* values passed in the URI to override the server's */
     int req_cache, req_time;
     int req_chunked;
+    int req_nosplice;
 };
 
 struct listener {
@@ -677,6 +678,8 @@ const char *HTTP_HELP =
 	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
 	"<li> /?k=<b>{0|1}</b>             :\n"
 	"  Enable transfer enconding chunked with 1 byte chunks\n"
+	"<li> /?S=<b>{0|1}</b>             :\n"
+	"  Disable/enable use of splice() to send data\n"
 	"</ul>\n"
 	"Note that those arguments may be cumulated on one line separated by\n"
 	" the '<b>&amp;</b>' sign :<br><ul>\n"
@@ -1682,7 +1685,7 @@ int event_cli_write(int fd) {
 #else
 	ret = max;
 #ifdef ENABLE_SPLICE
-	if (!b->l && !(global.flags & GFLAGS_NO_SPLICE)) {
+	if (!b->l && !(global.flags & GFLAGS_NO_SPLICE) && !s->req_nosplice) {
 	    /* dummy data only */
 	    if (!s->req_chunked) {
 
@@ -1990,6 +1993,7 @@ int event_accept(int fd) {
 	s->uri = NULL;
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
 	s->req_chunked = 0;
+	s->req_nosplice = 0;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2402,6 +2406,9 @@ int process_cli(struct session *t) {
 				break;
 			    case 'k':
 				t->req_chunked = result;
+				break;
+			    case 'S':
+				t->req_nosplice = !result;
 				break;
 			    }
 			    arg = next;
