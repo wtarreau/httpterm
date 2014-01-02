@@ -92,6 +92,10 @@
 #define SHUT_WR		1
 #endif
 
+#ifndef MSG_MORE
+#define MSG_MORE        0
+#endif
+
 /* We'll try to enable SO_REUSEPORT on Linux 2.4 and 2.6 if not defined.
  * There are two families of values depending on the architecture. Those
  * are at least valid on Linux 2.4 and 2.6, reason why we'll rely on the
@@ -1773,7 +1777,7 @@ int event_cli_write(int fd) {
 	}
 #endif
 	if (max && ret)
-	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL);
+	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | MSG_MORE);
 #endif
 
 	if (ret > 0) {
