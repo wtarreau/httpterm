@@ -23,8 +23,8 @@ CPU = generic
 CC = gcc
 LD = gcc
 
-# This is for recent Linux 2.6 with splice
-COPTS.linux26s = -DENABLE_POLL -DENABLE_EPOLL -DENABLE_SPLICE
+# This is for recent Linux 2.6 with splice and accept4()
+COPTS.linux26s = -DENABLE_POLL -DENABLE_EPOLL -DENABLE_SPLICE -DENABLE_ACCEPT4
 LIBS.linux26s =
 
 # This is for standard Linux 2.6 with epoll()

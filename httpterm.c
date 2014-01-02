@@ -37,6 +37,10 @@
  *
  */
 
+#ifdef ENABLE_ACCEPT4
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -1892,6 +1896,12 @@ int event_accept(int fd) {
     int cfd;
     int max_accept;
 
+#ifdef ENABLE_ACCEPT4
+    static int use_accept = 0;
+#else
+    static int use_accept = 1;
+#endif
+
     if (global.nbproc > 1)
 	    max_accept = 8; /* let other processes catch some connections too */
     else
@@ -1901,7 +1911,20 @@ int event_accept(int fd) {
 	struct sockaddr_storage addr;
 	socklen_t laddr = sizeof(addr);
 
-	if ((cfd = accept(fd, (struct sockaddr *)&addr, &laddr)) == -1) {
+#ifdef ENABLE_ACCEPT4
+	if (!use_accept) {
+	    cfd = accept4(fd, (struct sockaddr *)&addr, &laddr, SOCK_NONBLOCK);
+	    if (cfd == -1 && errno == ENOSYS)
+		use_accept = 1;
+	}
+#endif
+	if (use_accept) {
+	    cfd = accept(fd, (struct sockaddr *)&addr, &laddr);
+	    if (cfd != -1)
+		fcntl(cfd, F_SETFL, O_NONBLOCK);
+	}
+
+	if (cfd == -1) {
 	    switch (errno) {
 	    case EAGAIN:
 	    case EINTR:
@@ -1939,14 +1962,6 @@ int event_accept(int fd) {
 	s->cli_addr = addr;
 	if (cfd >= global.maxsock) {
 	    Alert("accept(): not enough free sockets. Raise -n argument. Giving up.\n");
-	    close(cfd);
-	    pool_free(task, t);
-	    pool_free(session, s);
-	    return 0;
-	}
-
-	if (fcntl(cfd, F_SETFL, O_NONBLOCK) == -1) {
-	    Alert("accept(): cannot set the socket in non blocking mode. Giving up\n");
 	    close(cfd);
 	    pool_free(task, t);
 	    pool_free(session, s);
