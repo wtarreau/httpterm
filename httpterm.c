@@ -2222,6 +2222,9 @@ static inline void srv_return_page(struct session *t) {
 	t->rep->r += hlen;
     }
     t->req->l = 0;
+
+    if (event_cli_write(t->cli_fd) < 0)
+	FD_SET(t->cli_fd, StaticWriteEvent);
 }
 
 
@@ -2468,7 +2471,6 @@ int process_cli(struct session *t) {
 	tv_eternity(&t->cnexpire);
 
 	/* Note: we also want to drain data */
-	FD_SET(t->cli_fd, StaticWriteEvent);
 	FD_SET(t->cli_fd, StaticReadEvent);
 	req->lr = req->r = req->data;
 	req->l = 0;
