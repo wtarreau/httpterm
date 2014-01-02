@@ -1496,7 +1496,7 @@ static inline struct server *get_server_rr(struct proxy *px) {
     
 /*
  * this function is called on a read event from a client socket.
- * It returns 0.
+ * It normally returns 0, or -1 in case of EAGAIN.
  */
 int event_cli_read(int fd) {
     struct task *t = fdtab[fd].owner;
@@ -1597,13 +1597,13 @@ int event_cli_read(int fd) {
 	task_wakeup(&rq, t);
     }
 
-    return 0;
+    return (s->res_cr == RES_SILENT) ? -1 : 0;
 }
 
 
 /*
  * this function is called on a write event from a client socket.
- * It returns 0.
+ * It normally returns 0, or -1 in case of EAGAIN.
  */
 int event_cli_write(int fd) {
     struct task *t = fdtab[fd].owner;
@@ -1816,7 +1816,7 @@ int event_cli_write(int fd) {
 	else if (errno == EAGAIN) { /* ignore EAGAIN */
 	    if (s->res_cw == RES_DATA)
 		goto return_data;
-	    return 0;
+	    return -1;
 	}
 	else {
 	    s->res_cw = RES_ERROR;
@@ -2046,7 +2046,8 @@ int event_accept(int fd) {
 	fdtab[cfd].owner = t;
 	fdtab[cfd].state = FD_STREADY;
 
-	FD_SET(cfd, StaticReadEvent);
+	if (event_cli_read(cfd) < 0)
+	    FD_SET(cfd, StaticReadEvent);
 
 	fd_insert(cfd);
 
