@@ -381,6 +381,10 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define ERR_RETRYABLE	1	/* retryable error, may be cumulated */
 #define ERR_FATAL	2	/* fatal error, may be cumulated */
 
+#define METH_HEAD       0
+#define METH_GET        1
+#define METH_POST       2
+
 static char chunk_pattern[] = "1\r\n";
 #define CHUNK_LEN (sizeof(chunk_pattern)-1)
 
@@ -454,6 +458,7 @@ struct session {
     int req_chunked;
     int req_nosplice;
     int req_random;
+    int req_meth;
 };
 
 struct listener {
@@ -525,6 +530,7 @@ int master_pipe[2], chunked_pipe[CHUNK_LEN][2], slave_pipe[2]; /* pipes used by 
 int slave_pipe_usage = 0;
 struct pipe chunk_slave_pipe[CHUNK_LEN];
 int pipesize = RESPSIZE;
+int ignore_err;
 
 /* send zeroes instead of aligned data */
 #define GFLAGS_SEND_ZERO	0x1
@@ -2371,6 +2377,12 @@ int process_cli(struct session *t) {
 		t->uri = req->h;
 		*ptr = '\0';
 
+		t->req_meth = METH_GET;
+		if (*t->uri == 'P')
+		    t->req_meth = METH_POST;
+		else if (*t->uri == 'H')
+		    t->req_meth = METH_HEAD;
+
 		/* we'll check for the following URIs :
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
 		 * /? to get the help page.
@@ -2404,7 +2416,8 @@ int process_cli(struct session *t) {
 
 			    switch (*arg) {
 			    case 's':
-				t->req_size = result << mult;
+				if (t->req_meth != METH_HEAD)
+				    t->req_size = result << mult;
 				break;
 			    case 'r':
 				t->req_code = result << mult;
@@ -2575,6 +2588,11 @@ int process_cli(struct session *t) {
 		if ((rep->l == 0 && t->to_write == 0)) {
 		    /* this is the end */
 		    shutdown(t->cli_fd, SHUT_WR);
+		    if (t->req_meth == METH_POST) {
+			/* drain possibly pending request data */
+			if (recv(t->cli_fd, NULL, INT_MAX, MSG_NOSIGNAL | MSG_TRUNC) == -1 && errno == EFAULT)
+			    ignore_err = recv(t->cli_fd, trash, sizeof(trash), MSG_NOSIGNAL);
+		    }
 		    goto terminate_client;
 		}
 		else { /* buffer not empty */
