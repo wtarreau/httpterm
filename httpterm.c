@@ -349,7 +349,8 @@ int strlcpy2(char *dst, const char *src, int size) {
 #define CL_STHEADERS	0
 #define CL_STWAIT	1
 #define CL_STDATA	2
-#define CL_STCLOSE	3
+#define CL_STPAUSE	3
+#define CL_STCLOSE	4
 
 /* possible socket states */
 #define SKST_SCR	1	/* client socket shut on the read direction */
@@ -458,6 +459,7 @@ struct session {
     int req_chunked;
     int req_nosplice;
     int req_random;
+    int req_pieces;
     int req_meth;
 };
 
@@ -1687,6 +1689,13 @@ int event_cli_write(int fd) {
 	    }
 	}
 
+	if (s->req_pieces) {
+	    if (max > 4096) {
+		max = 4096;
+		max = (((unsigned long long)max * ((rand() >> 8) & 0xFFFF)) >> 16) + 1;
+	    }
+	}
+
 #ifndef MSG_NOSIGNAL
 	{
 	    int skerr;
@@ -1800,7 +1809,7 @@ int event_cli_write(int fd) {
 	}
 #endif
 	if (max && ret)
-	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | MSG_MORE);
+	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | (s->req_pieces ? 0 : MSG_MORE));
 #endif
 
 	if (ret > 0) {
@@ -1828,7 +1837,15 @@ int event_cli_write(int fd) {
 	    }
 	    
 	    s->res_cw = RES_DATA;
-	    if (--max_loops > 0)
+	    if (s->req_pieces) {
+		if (s->to_write) {
+		    s->cli_state = CL_STPAUSE;
+		    FD_CLR(s->cli_fd, StaticWriteEvent);
+		    /* pause between 1 and 256 ms */
+		    tv_delayfrom(&s->cnexpire, &now, 4 << ((rand() >> 16) & 7));
+		}
+	    }
+	    else if (--max_loops > 0)
 		goto loop_again;
 	}
 	else if (ret == 0) {
@@ -2011,6 +2028,7 @@ int event_accept(int fd) {
 	s->req_chunked = 0;
 	s->req_nosplice = 0;
 	s->req_random = 0;
+	s->req_pieces = 0;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2439,6 +2457,13 @@ int process_cli(struct session *t) {
 				if (result)
 				    t->req_nosplice = 1;
 				break;
+			    case 'p':
+				t->req_pieces = result;
+				if (result) {
+				    t->req_nosplice = 1;
+				    setsockopt(t->cli_fd, SOL_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
+				}
+				break;
 			    }
 			    arg = next;
 			}
@@ -2532,6 +2557,7 @@ int process_cli(struct session *t) {
 	return 1;
     }
     else if (c == CL_STDATA) {
+    restart_data:
 	if ((!(t->sock_st & SKST_SCW) && t->res_cw == RES_ERROR) ||
 	    (!(t->sock_st & SKST_SCR) && t->res_cr == RES_ERROR)) {
 	terminate_client:
@@ -2612,6 +2638,29 @@ int process_cli(struct session *t) {
 	}
 
 	return 0; /* other cases change nothing */
+    }
+    else if (c == CL_STPAUSE) {
+	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_NULL)) {
+	    /* last read ? */
+	    t->sock_st |= SKST_SCR;
+	    if (t->sock_st & SKST_SCW)
+		goto terminate_client;
+	    FD_CLR(t->cli_fd, StaticReadEvent);
+	    tv_eternity(&t->crexpire);
+	    shutdown(t->cli_fd, SHUT_RD);
+	}
+
+	if (tv_cmp2_ms(&t->cnexpire, &now) > 0)
+	    return 0; /* nothing changed */
+
+	t->cli_state = CL_STDATA;
+	tv_eternity(&t->cnexpire);
+
+	/* Note: we also want to drain data */
+	FD_SET(t->cli_fd, StaticWriteEvent);
+	if (t->proxy->clitimeout)
+	    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
+	goto restart_data;
     }
     else { /* CL_STCLOSE: nothing to do */
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
