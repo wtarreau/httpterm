@@ -453,6 +453,7 @@ struct session {
     int req_cache, req_time;
     int req_chunked;
     int req_nosplice;
+    int req_random;
 };
 
 struct listener {
@@ -592,6 +593,8 @@ static fd_set *PrevReadEvent = NULL, *PrevWriteEvent = NULL;
 static char trash[BUFSIZE];
 static char common_response[RESPSIZE];
 static char common_chunk_resp[RESPSIZE];
+static char *random_resp;
+static int random_resp_len = RESPSIZE;
 
 const int zero = 0;
 const int one = 1;
@@ -680,6 +683,8 @@ const char *HTTP_HELP =
 	"  Enable transfer enconding chunked with 1 byte chunks\n"
 	"<li> /?S=<b>{0|1}</b>             :\n"
 	"  Disable/enable use of splice() to send data\n"
+	"<li> /?R=<b>{0|1}</b>             :\n"
+	"  Disable/enable sending random data (disables splicing)\n"
 	"</ul>\n"
 	"Note that those arguments may be cumulated on one line separated by\n"
 	" the '<b>&amp;</b>' sign :<br><ul>\n"
@@ -1649,6 +1654,11 @@ int event_cli_write(int fd) {
 		    buffer_len = sizeof(common_chunk_resp);
 		    modulo = CHUNK_LEN;
 		}
+		else if (s->req_random) {
+		    buffer = random_resp;
+		    buffer_len = random_resp_len;
+		    modulo = random_resp_len;
+		}
 		else {
 		    buffer = common_response;
 		    buffer_len = sizeof(common_response);
@@ -1994,6 +2004,7 @@ int event_accept(int fd) {
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
 	s->req_chunked = 0;
 	s->req_nosplice = 0;
+	s->req_random = 0;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2409,6 +2420,11 @@ int process_cli(struct session *t) {
 				break;
 			    case 'S':
 				t->req_nosplice = !result;
+				break;
+			    case 'R':
+				t->req_random = result;
+				if (result)
+				    t->req_nosplice = 1;
 				break;
 			    }
 			    arg = next;
@@ -4062,6 +4078,10 @@ void init(int argc, char **argv) {
 	for (i = 0; i < sizeof(common_chunk_resp); i++)
 	    common_chunk_resp[i] = chunk_pattern[i % CHUNK_LEN];
     }
+
+    random_resp = malloc(random_resp_len);
+    for (i = 0; i < random_resp_len; i++)
+	random_resp[i] = rand() >> 16;
 
     if (cfg_maxconn > 0)
 	global.maxconn = cfg_maxconn;
