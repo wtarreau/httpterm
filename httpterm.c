@@ -688,7 +688,7 @@ const char *HTTP_HELP =
 	"<li> /?t=&lt;<b>time</b>&gt;      :\n"
 	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
 	"<li> /?k=<b>{0|1}</b>             :\n"
-	"  Enable transfer enconding chunked with 1 byte chunks\n"
+	"  Enable transfer encoding chunked with 1 byte chunks\n"
 	"<li> /?S=<b>{0|1}</b>             :\n"
 	"  Disable/enable use of splice() to send data\n"
 	"<li> /?R=<b>{0|1}</b>             :\n"
@@ -1826,13 +1826,13 @@ int event_cli_write(int fd) {
 		s->to_write -= ret;
 
 		/* in chunked mode, switch to "standard" data for sending
-		 * the 3 final digits
+		 * the 3 final digits, followed by a last \r\n for trailers.
 		 */
 		if (s->to_write == 3) {
 		    s->to_write = 0;
-		    s->rep->l = 3;
-		    s->rep->r = s->rep->h = s->rep->lr = s->rep->w = "0\r\n";
-		    s->rep->r += 3;
+		    s->rep->l = 5;
+		    s->rep->r = s->rep->h = s->rep->lr = s->rep->w = "0\r\n\r\n";
+		    s->rep->r += 5;
 		}
 	    }
 	    
