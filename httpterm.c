@@ -62,6 +62,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <limits.h>
 
 #if defined(__dietlibc__)
 #include <strings.h>
