@@ -132,6 +132,10 @@
 #define __NR_splice             340
 #define __NR_tee                342
 #define __NR_vmsplice           343
+#elif defined (__mips__)
+#define __NR_splice             304
+#define __NR_tee                306
+#define __NR_vmsplice           307
 #endif /* $arch */
 #endif /* __NR_splice */
 
