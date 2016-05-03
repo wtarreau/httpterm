@@ -450,7 +450,7 @@ struct session {
     int sock_st;			/* socket states : SKST_S[CS][RW] */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
-    unsigned long to_write;		/* #of response data bytes to write after headers */
+    unsigned long long to_write;	/* #of response data bytes to write after headers */
     struct sockaddr_storage cli_addr;	/* the client address */
     struct server *srv;			/* the server being used */
     struct {
@@ -460,7 +460,8 @@ struct session {
     } logs;
     unsigned int uniq_id;		/* unique ID used for the traces */
     char *uri;				/* the requested URI within the buffer */
-    int req_code, req_size;		/* values passed in the URI to override the server's */
+    signed long long req_size;		/* values passed in the URI to override the server's */
+    int req_code;
     int req_cache, req_time;
     int req_chunked;
     int req_nosplice;
@@ -1636,7 +1637,8 @@ int event_cli_write(int fd) {
     struct session *s = t->context;
     struct buffer *b = s->rep;
     char *data_ptr;
-    int ret, max;
+    int ret;
+    unsigned long long max;
     int max_loops = 4;
 
  loop_again:
@@ -1682,8 +1684,8 @@ int event_cli_write(int fd) {
 		offset = (s->req_size - s->to_write) % modulo;
 		data_ptr = buffer + offset;
 		max = s->to_write;
-		if (max > buffer_len - offset)
-		    max = buffer_len - offset;
+		if (max > (unsigned long long)(buffer_len - offset))
+		    max = (unsigned long long)buffer_len - offset;
 
 	    } else {
 		if (s->res_cw != RES_DATA)
@@ -1720,7 +1722,7 @@ int event_cli_write(int fd) {
 	    /* dummy data only */
 	    if (!s->req_chunked) {
 
-		if (slave_pipe_usage < s->to_write) {
+		if ((unsigned long long)slave_pipe_usage < s->to_write) {
 		    ret = tee(master_pipe[0], slave_pipe[1], pipesize, SPLICE_F_NONBLOCK);
 		    if (ret > 0)
 			slave_pipe_usage += ret;
@@ -1789,7 +1791,7 @@ int event_cli_write(int fd) {
 		}
 
 		/* fill data if needed */
-		if (p->usage < s->to_write) {
+		if ((unsigned long long)p->usage < s->to_write) {
 		    ret = tee(chunked_pipe[p->stop_alignment][0], p->pipe[1], pipesize,
 		              SPLICE_F_NONBLOCK);
 		    if (ret > 0) {
@@ -2247,10 +2249,10 @@ static inline void srv_return_page(struct session *t) {
 	    hlen = sprintf(t->rep->data,
 			   "HTTP/1.1 %03d\r\n"
 			   "Connection: close\r\n"
-			   "Content-length: %d\r\n"
+			   "Content-length: %lld\r\n"
 			   "%s"
 			   "X-req: size=%ld, time=%ld ms\r\n"
-			   "X-rsp: id=%s, code=%d, cache=%d, size=%d, time=%d ms (%ld real)\r\n"
+			   "X-rsp: id=%s, code=%d, cache=%d, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
 			   t->req_size,
@@ -2267,7 +2269,7 @@ static inline void srv_return_page(struct session *t) {
 			   "Transfer-Encoding: chunked\r\n"
 			   "%s"
 			   "X-req: size=%ld, time=%ld ms\r\n"
-			   "X-rsp: id=%s, code=%d, cache=%d, chunked, size=%d, time=%d ms (%ld real)\r\n"
+			   "X-rsp: id=%s, code=%d, cache=%d, chunked, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
 			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
@@ -2441,7 +2443,7 @@ int process_cli(struct session *t) {
 			    switch (*arg) {
 			    case 's':
 				if (t->req_meth != METH_HEAD)
-				    t->req_size = result << mult;
+				    t->req_size = (long long)result << mult;
 				break;
 			    case 'r':
 				t->req_code = result << mult;
