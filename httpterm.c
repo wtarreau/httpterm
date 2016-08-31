@@ -2413,11 +2413,11 @@ int process_cli(struct session *t) {
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
 		 * /? to get the help page.
 		 */
-		if ((next = strstr(t->uri, "/?")) != NULL) {
+		if ((next = strchr(t->uri, '?')) != NULL) {
 		    char *arg;
 		    long result, mult;
 
-		    next += 2;
+		    next += 1;
 		    arg = next;
 		    if (next == ptr || *next == ' ') {
 			client_retnclose(t, strlen(HTTP_HELP), HTTP_HELP);
