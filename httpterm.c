@@ -2113,6 +2113,8 @@ int event_accept(int fd) {
 	if (event_cli_read(cfd) < 0)
 	    FD_SET(cfd, StaticReadEvent);
 
+	setsockopt(cfd, SOL_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
+
 	fd_insert(cfd);
 
 	tv_eternity(&s->cnexpire);
