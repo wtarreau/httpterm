@@ -448,6 +448,7 @@ struct session {
     int cli_fd;				/* the client side fd */
     int cli_state;			/* state of the client side */
     int sock_st;			/* socket states : SKST_S[CS][RW] */
+    int ka;				/* non-zero = keep-alive */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
     unsigned long long to_write;	/* #of response data bytes to write after headers */
@@ -2025,6 +2026,7 @@ int event_accept(int fd) {
 	s->proxy = p;
 	s->cli_state = CL_STHEADERS;
 	s->sock_st = 0;
+	s->ka = 0;
 	s->req = s->rep = NULL; /* will be allocated later */
         s->to_write = 0;
 
@@ -2248,13 +2250,14 @@ static inline void srv_return_page(struct session *t) {
 	if (!t->req_chunked) {
 	    hlen = sprintf(t->rep->data,
 			   "HTTP/1.1 %03d\r\n"
-			   "Connection: close\r\n"
+			   "Connection: %s\r\n"
 			   "Content-length: %lld\r\n"
 			   "%s"
 			   "X-req: size=%ld, time=%ld ms\r\n"
 			   "X-rsp: id=%s, code=%d, cache=%d, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
+			   t->ka ? "keep-alive" : "close",
 			   t->req_size,
 			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 			   (long)t->req->total, t->logs.t_request,
@@ -2265,13 +2268,14 @@ static inline void srv_return_page(struct session *t) {
 	else {
 	    hlen = sprintf(t->rep->data,
 			   "HTTP/1.1 %03d\r\n"
-			   "Connection: close\r\n"
+			   "Connection: %s\r\n"
 			   "Transfer-Encoding: chunked\r\n"
 			   "%s"
 			   "X-req: size=%ld, time=%ld ms\r\n"
 			   "X-rsp: id=%s, code=%d, cache=%d, chunked, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
+			   t->ka ? "keep-alive" : "close",
 			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 			   (long)t->req->total, t->logs.t_request,
 			   srv->id, t->req_code, t->req_cache,
@@ -2409,6 +2413,10 @@ int process_cli(struct session *t) {
 		else if (*t->uri == 'H')
 		    t->req_meth = METH_HEAD;
 
+		/* keep-alive by default for HTTP/1.1 */
+		if (*(ptr-1) == '1')
+		    t->ka = 1;
+
 		/* we'll check for the following URIs :
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
 		 * /? to get the help page.
@@ -2487,6 +2495,18 @@ int process_cli(struct session *t) {
 		     */
 		    if (t->req_chunked)
 			t->req_size = t->req_size * (CHUNK_LEN * 2) + 3;
+		}
+	    }
+	    else {
+		if (strncasecmp(req->h, "connection:", 11) == 0) {
+		    char *p = req->h + 12;
+
+		    while (p < req->lr && (*p == ' ' || *p == '\t'))
+			p++;
+		    if (*p == 'c' || *p == 'C') // close
+			t->ka = 0;
+		    else if (*p == 'k' || *p == 'K') // keep-alive
+			t->ka = 1;
 		}
 	    }
 
