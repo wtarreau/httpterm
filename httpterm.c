@@ -1732,7 +1732,7 @@ int event_cli_write(int fd) {
 
 		if (slave_pipe_usage) {
 		    /* we need to release data from the pipe before calling tee() */
-		    ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|SPLICE_F_MORE);
+		    ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|((s->ka && (max >= s->to_write)) ? 0 : SPLICE_F_MORE));
 		    if (ret > 0) {
 			slave_pipe_usage -= ret;
 			max = 0;
@@ -1803,7 +1803,7 @@ int event_cli_write(int fd) {
 
 		if (p->usage) {
 		    /* left the final 3 octet 0\r\n */
-		    ret = splice(p->pipe[0], NULL, fd, NULL, s->to_write - 3, SPLICE_F_NONBLOCK|SPLICE_F_MORE);
+		    ret = splice(p->pipe[0], NULL, fd, NULL, s->to_write - 3, SPLICE_F_NONBLOCK|(s->ka ? 0 : SPLICE_F_MORE));
 		    if (ret > 0) {
 			p->usage -= ret;
 			max = 0;
@@ -1818,7 +1818,7 @@ int event_cli_write(int fd) {
 	}
 #endif
 	if (max && ret)
-	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | (s->req_pieces ? 0 : MSG_MORE));
+	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | (s->req_pieces || (s->ka && max >= s->to_write + b->l)) ? 0 : MSG_MORE);
 #endif
 
 	if (ret > 0) {
@@ -2306,6 +2306,8 @@ int process_cli(struct session *t) {
     struct buffer *req = t->req;
     struct buffer *rep = t->rep;
 
+ loop:
+
     if (c == CL_STHEADERS) {
 	/* now parse the partial (or complete) headers */
 	while (req->lr < req->r) { /* this loop only sees one header at each iteration */
@@ -2642,6 +2644,12 @@ int process_cli(struct session *t) {
 		shutdown(t->cli_fd, SHUT_WR);
 	    } else {
 		if ((rep->l == 0 && t->to_write == 0)) {
+		    if (t->ka) {
+			c = t->cli_state = CL_STHEADERS;
+			req->lr = req->r = req->data;
+			req->l = 0;
+			goto loop;
+		    }
 		    /* this is the end */
 		    shutdown(t->cli_fd, SHUT_WR);
 		    if (t->req_meth == METH_POST) {
@@ -4352,7 +4360,8 @@ int start_proxies(int verbose) {
 #endif
 #ifdef TCP_CORK
 	    /* don't send partial frames, and merge FIN with last ACK */
-	    setsockopt(fd, SOL_TCP, TCP_CORK, (char *) &one, sizeof(one));
+	    if (!MSG_MORE)
+		setsockopt(fd, SOL_TCP, TCP_CORK, (char *) &one, sizeof(one));
 #endif
 
 	    /* the function for the accept() event */
