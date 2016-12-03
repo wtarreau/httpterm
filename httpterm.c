@@ -1818,7 +1818,7 @@ int event_cli_write(int fd) {
 	}
 #endif
 	if (max && ret)
-	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | (s->req_pieces || (s->ka && max >= s->to_write + b->l)) ? 0 : MSG_MORE);
+	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | ((s->req_pieces || (s->ka && max >= s->to_write + b->l)) ? 0 : MSG_MORE));
 #endif
 
 	if (ret > 0) {
