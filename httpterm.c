@@ -1938,7 +1938,7 @@ int event_accept(int fd) {
     struct proxy *p = (struct proxy *)fdtab[fd].owner;
     struct session *s;
     struct task *t;
-    int cfd;
+    int cfd = -1;
     int max_accept;
 
 #ifdef ENABLE_ACCEPT4
