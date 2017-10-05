@@ -705,6 +705,8 @@ const char *HTTP_HELP =
 	"  Disable/enable use of splice() to send data\n"
 	"<li> /?R=<b>{0|1}</b>             :\n"
 	"  Disable/enable sending random data (disables splicing)\n"
+	"<li> /?p=<b>size</b>              :\n"
+	"  Make pieces no larger than this\n"
 	"</ul>\n"
 	"Note that those arguments may be cumulated on one line separated by\n"
 	" the '<b>&amp;</b>' sign :<br><ul>\n"
