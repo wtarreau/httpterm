@@ -697,6 +697,8 @@ const char *HTTP_HELP =
 	"  present &lt;<b>retcode</b>&gt; as the HTTP return code.  Eg: /?r=404\n"
 	"<li> /?c=&lt;<b>cache</b>&gt;     :\n"
 	"  set the return as <b>not cacheable if zero</b>.          Eg: /?c=0\n"
+	"<li> /?C=&lt;<b>close</b>&gt;     :\n"
+	"  force the response to use close if not zero.             Eg: /?C=1\n"
 	"<li> /?t=&lt;<b>time</b>&gt;      :\n"
 	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
 	"<li> /?k=<b>{0|1}</b>             :\n"
@@ -2471,6 +2473,9 @@ int process_cli(struct session *t) {
 				break;
 			    case 'c':
 				t->req_cache = result << mult;
+				break;
+			    case 'C':
+				t->ka &= !!result;
 				break;
 			    case 'k':
 				t->req_chunked = result;
