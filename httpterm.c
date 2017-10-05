@@ -2564,6 +2564,9 @@ int process_cli(struct session *t) {
 	return t->cli_state != CL_STHEADERS;
     }
     else if (c == CL_STWAIT) {
+	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_ERROR))
+	    goto terminate_client;
+
 	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_NULL)) {
 	    /* last read ? */
 	    t->sock_st |= SKST_SCR;
@@ -2682,6 +2685,9 @@ int process_cli(struct session *t) {
 	return 0; /* other cases change nothing */
     }
     else if (c == CL_STPAUSE) {
+	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_ERROR))
+	    goto terminate_client;
+
 	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_NULL)) {
 	    /* last read ? */
 	    t->sock_st |= SKST_SCR;
