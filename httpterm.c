@@ -2662,6 +2662,7 @@ int process_cli(struct session *t) {
 			c = t->cli_state = CL_STHEADERS;
 			req->lr = req->r = req->data;
 			req->l = 0;
+			t->uri = NULL; // parse again
 			goto loop;
 		    }
 		    /* this is the end */
