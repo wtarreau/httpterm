@@ -2121,7 +2121,7 @@ int event_accept(int fd) {
 	if (event_cli_read(cfd) < 0)
 	    FD_SET(cfd, StaticReadEvent);
 
-	setsockopt(cfd, SOL_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
+	setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
 
 	fd_insert(cfd);
 
@@ -2373,7 +2373,7 @@ int process_cli(struct session *t) {
 
 #ifdef TCP_QUICKACK
 		    /* we're going to wait, let's ACK the request */
-		    setsockopt(t->cli_fd, SOL_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
+		    setsockopt(t->cli_fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
 #endif
 		    FD_SET(t->cli_fd, StaticReadEvent);
 		    req->lr = req->r = req->data;
@@ -2492,7 +2492,7 @@ int process_cli(struct session *t) {
 				t->req_pieces = result;
 				if (result) {
 				    t->req_nosplice = 1;
-				    setsockopt(t->cli_fd, SOL_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
+				    setsockopt(t->cli_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
 				}
 				break;
 			    }
@@ -4374,12 +4374,12 @@ int start_proxies(int verbose) {
 
 #ifdef TCP_QUICKACK
 	    /* we don't want quick ACKs there */
-	    setsockopt(fd, SOL_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
+	    setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &zero, sizeof(zero));
 #endif
 #ifdef TCP_CORK
 	    /* don't send partial frames, and merge FIN with last ACK */
 	    if (!MSG_MORE)
-		setsockopt(fd, SOL_TCP, TCP_CORK, (char *) &one, sizeof(one));
+		setsockopt(fd, IPPROTO_TCP, TCP_CORK, (char *) &one, sizeof(one));
 #endif
 
 	    /* the function for the accept() event */
