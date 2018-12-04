@@ -699,6 +699,8 @@ const char *HTTP_HELP =
 	"  set the return as <b>not cacheable if zero</b>.          Eg: /?c=0\n"
 	"<li> /?C=&lt;<b>close</b>&gt;     :\n"
 	"  force the response to use close if not zero.             Eg: /?C=1\n"
+	"<li> /?K=&lt;<b>keep-alive</b>&gt;     :\n"
+	"  force the response to use keep-alive if not zero.        Eg: /?K=1\n"
 	"<li> /?t=&lt;<b>time</b>&gt;      :\n"
 	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
 	"<li> /?k=<b>{0|1}</b>             :\n"
@@ -1740,7 +1742,7 @@ int event_cli_write(int fd) {
 
 		if (slave_pipe_usage) {
 		    /* we need to release data from the pipe before calling tee() */
-		    ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|((s->ka && (max >= s->to_write)) ? 0 : SPLICE_F_MORE));
+		    ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|(((s->ka & 1) && (max >= s->to_write)) ? 0 : SPLICE_F_MORE));
 		    if (ret > 0) {
 			slave_pipe_usage -= ret;
 			max = 0;
@@ -1811,7 +1813,7 @@ int event_cli_write(int fd) {
 
 		if (p->usage) {
 		    /* left the final 3 octet 0\r\n */
-		    ret = splice(p->pipe[0], NULL, fd, NULL, s->to_write - 3, SPLICE_F_NONBLOCK|(s->ka ? 0 : SPLICE_F_MORE));
+		    ret = splice(p->pipe[0], NULL, fd, NULL, s->to_write - 3, SPLICE_F_NONBLOCK|((s->ka & 1) ? 0 : SPLICE_F_MORE));
 		    if (ret > 0) {
 			p->usage -= ret;
 			max = 0;
@@ -1826,7 +1828,7 @@ int event_cli_write(int fd) {
 	}
 #endif
 	if (max && ret)
-	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | ((s->req_pieces || (s->ka && max >= s->to_write + b->l)) ? 0 : MSG_MORE));
+	    ret = send(fd, data_ptr, max, MSG_DONTWAIT | MSG_NOSIGNAL | ((s->req_pieces || ((s->ka & 1) && max >= s->to_write + b->l)) ? 0 : MSG_MORE));
 #endif
 
 	if (ret > 0) {
@@ -2267,7 +2269,7 @@ static inline void srv_return_page(struct session *t) {
 			   "X-rsp: id=%s, code=%d, cache=%d, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
-			   t->ka ? "keep-alive" : "close",
+			   (t->ka & 1) ? "keep-alive" : "close",
 			   t->req_size,
 			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 			   (long)t->req->total, t->logs.t_request,
@@ -2285,7 +2287,7 @@ static inline void srv_return_page(struct session *t) {
 			   "X-rsp: id=%s, code=%d, cache=%d, chunked, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
-			   t->ka ? "keep-alive" : "close",
+			   (t->ka & 1) ? "keep-alive" : "close",
 			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 			   (long)t->req->total, t->logs.t_request,
 			   srv->id, t->req_code, t->req_cache,
@@ -2475,7 +2477,10 @@ int process_cli(struct session *t) {
 				t->req_cache = result << mult;
 				break;
 			    case 'C':
-				t->ka &= !!result;
+				t->ka = 2 | !result;  // forced OFF
+				break;
+			    case 'K':
+				t->ka = 2 | !!result; // forced ON
 				break;
 			    case 'k':
 				t->req_chunked = result;
@@ -2512,7 +2517,7 @@ int process_cli(struct session *t) {
 			t->req_size = t->req_size * (CHUNK_LEN * 2) + 3;
 		}
 	    }
-	    else {
+	    else if (t->ka < 2) { // keep-alive/close not forced
 		if (strncasecmp(req->h, "connection:", 11) == 0) {
 		    char *p = req->h + 12;
 
@@ -2658,7 +2663,7 @@ int process_cli(struct session *t) {
 		shutdown(t->cli_fd, SHUT_WR);
 	    } else {
 		if ((rep->l == 0 && t->to_write == 0)) {
-		    if (t->ka) {
+		    if (t->ka & 1) {
 			c = t->cli_state = CL_STHEADERS;
 			req->lr = req->r = req->data;
 			req->l = 0;
