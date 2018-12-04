@@ -83,11 +83,11 @@
 #include "include/mini-clist.h"
 
 #ifndef HTTPTERM_VERSION
-#define HTTPTERM_VERSION "1.7.4"
+#define HTTPTERM_VERSION "1.7.5"
 #endif
 
 #ifndef HTTPTERM_DATE
-#define HTTPTERM_DATE	"2017/10/05"
+#define HTTPTERM_DATE	"2018/12/04"
 #endif
 
 #ifndef SHUT_RD
@@ -733,7 +733,7 @@ int process_session(struct task *t);
 
 void display_version() {
     printf("HTTPTerm version " HTTPTERM_VERSION " " HTTPTERM_DATE"\n");
-    printf("Copyright 2000-2017 Willy Tarreau <w@1wt.eu>\n\n");
+    printf("Copyright 2000-2018 Willy Tarreau <w@1wt.eu>\n\n");
 }
 
 /*
