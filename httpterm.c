@@ -468,6 +468,7 @@ struct session {
     signed long long req_size;		/* values passed in the URI to override the server's */
     int req_code;
     int req_cache, req_time;
+    int req_bodylen;
     int req_chunked;
     int req_nosplice;
     int req_random;
@@ -701,6 +702,8 @@ const char *HTTP_HELP =
 	"  force the response to use close if not zero.             Eg: /?C=1\n"
 	"<li> /?K=&lt;<b>keep-alive</b>&gt;     :\n"
 	"  force the response to use keep-alive if not zero.        Eg: /?K=1\n"
+	"<li> /?b=&lt;<b>bodylen</b>&gt;     :\n"
+	"  advertise the body length in content-length if not zero. Eg: /?b=0\n"
 	"<li> /?t=&lt;<b>time</b>&gt;      :\n"
 	"  wait &lt;<b>time</b>&gt; milliseconds before responding. Eg: /?t=500\n"
 	"<li> /?k=<b>{0|1}</b>             :\n"
@@ -2049,6 +2052,7 @@ int event_accept(int fd) {
 	s->req_nosplice = 0;
 	s->req_random = 0;
 	s->req_pieces = 0;
+	s->req_bodylen = 1;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2263,13 +2267,14 @@ static inline void srv_return_page(struct session *t) {
 	    hlen = sprintf(t->rep->data,
 			   "HTTP/1.1 %03d\r\n"
 			   "Connection: %s\r\n"
-			   "Content-length: %lld\r\n"
+			   "%sContent-length: %lld\r\n"
 			   "%s"
 			   "X-req: size=%ld, time=%ld ms\r\n"
 			   "X-rsp: id=%s, code=%d, cache=%d, size=%lld, time=%d ms (%ld real)\r\n"
 			   "\r\n",
 			   t->req_code,
 			   (t->ka & 1) ? "keep-alive" : "close",
+			   t->req_bodylen ? "" : "X-",
 			   t->req_size,
 			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
 			   (long)t->req->total, t->logs.t_request,
@@ -2484,6 +2489,9 @@ int process_cli(struct session *t) {
 				break;
 			    case 'k':
 				t->req_chunked = result;
+				break;
+			    case 'b':
+				t->req_bodylen = result;
 				break;
 			    case 'S':
 				t->req_nosplice = !result;
