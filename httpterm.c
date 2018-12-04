@@ -2511,7 +2511,7 @@ int process_cli(struct session *t) {
 			    }
 			    arg = next;
 			}
-			if (*arg == '&')
+			if (*arg == '&' || *arg == ';' || *arg == '/' || *arg == '?' || *arg == ',')
 			    arg++;
 			else
 			    break;
