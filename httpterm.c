@@ -357,10 +357,11 @@ int strlcpy2(char *dst, const char *src, int size) {
 
 /* different possible states for the client side */
 #define CL_STHEADERS	0
-#define CL_STWAIT	1
-#define CL_STDATA	2
-#define CL_STPAUSE	3
-#define CL_STCLOSE	4
+#define CL_STBODY	1
+#define CL_STWAIT	2
+#define CL_STDATA	3
+#define CL_STPAUSE	4
+#define CL_STCLOSE	5
 
 /* possible socket states */
 #define SKST_SCR	1	/* client socket shut on the read direction */
@@ -2319,6 +2320,7 @@ int process_cli(struct session *t) {
     int c = t->cli_state;
     struct buffer *req = t->req;
     struct buffer *rep = t->rep;
+    long extra;
 
  loop:
 
@@ -2359,6 +2361,13 @@ int process_cli(struct session *t) {
 		}
 
 	    end_of_request:
+		/* skip empty header */
+		ptr = req->h;
+		if ((ptr[0] == ptr[1]) || (ptr[1] != '\r' && ptr[1] != '\n'))
+		    req->lr = ptr + 1; /* \r\r, \n\n, \r[^\n], \n[^\r] */
+		else
+		    req->lr = ptr + 2; /* \r\n or \n\r */
+
 		req->rlim = req->data + BUFSIZE; /* no more rewrite needed */
 		t->logs.t_request = tv_diff(&t->logs.tv_accept, &now);
 
@@ -2367,11 +2376,22 @@ int process_cli(struct session *t) {
 		    goto terminate_client;
 		t->srv->cur_sess++;
 
-		tv_eternity(&t->crexpire);
-
 		if (t->req_time < 0)
 		    t->req_time = t->srv->resp_time;
 
+		if (t->req_body) {
+		    /* we have to wait for the rest of the body to come */
+#ifdef TCP_QUICKACK
+		    /* we're going to wait, let's ACK the request */
+		    setsockopt(t->cli_fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
+#endif
+		    t->cli_state = CL_STBODY;
+		    goto consume_body;
+		}
+
+	    end_of_request_body:
+		/* no more headers nor body expected */
+		tv_eternity(&t->crexpire);
 		if (t->req_time) {
 		    /* we have to wait for the response */
 		    tv_delayfrom(&t->cnexpire, &now, t->req_time);
@@ -2593,6 +2613,47 @@ int process_cli(struct session *t) {
 
 	return t->cli_state != CL_STHEADERS;
     }
+    else if (c == CL_STBODY) {
+	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_ERROR))
+	    goto terminate_client;
+
+	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_NULL)) {
+	    /* last read ? */
+	    t->sock_st |= SKST_SCR;
+	    if (t->sock_st & SKST_SCW)
+		goto terminate_client;
+	    FD_CLR(t->cli_fd, StaticReadEvent);
+	    tv_eternity(&t->crexpire);
+	    fd_delete(t->cli_fd);
+	    t->cli_state = CL_STCLOSE;
+	    return 1;
+	}
+	else if (tv_cmp2_ms(&t->crexpire, &now) <= 0) {
+
+	    /* read timeout : give up with an error message.
+	     */
+	    client_retnclose(t, t->proxy->errmsg.len408, t->proxy->errmsg.msg408);
+	    return 1;
+	}
+    consume_body:
+	extra = req->data + req->l - req->lr;
+	req->lr = req->r = req->data;
+	req->l = 0;
+
+	if (t->req_body > (long long)extra)
+	    t->req_body -= extra;
+	else
+	    t->req_body = 0;
+
+	if (t->req_body) {
+	    FD_SET(t->cli_fd, StaticReadEvent);
+	    if (t->proxy->clitimeout)
+		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
+	    return 0;
+	}
+	/* fall back to common processing. Yeah I know, spaghetti code. */
+	goto end_of_request_body;
+    }
     else if (c == CL_STWAIT) {
 	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_ERROR))
 	    goto terminate_client;
@@ -2690,6 +2751,7 @@ int process_cli(struct session *t) {
 			t->srv = NULL;
 			t->uri = NULL; // parse again
 			t->req_code = t->req_size = t->req_cache = t->req_time = -1;
+			t->req_body = 0;
 			t->req_chunked = 0;
 			t->req_nosplice = 0;
 			t->req_random = 0;
