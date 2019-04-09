@@ -466,6 +466,7 @@ struct session {
     unsigned int uniq_id;		/* unique ID used for the traces */
     char *uri;				/* the requested URI within the buffer */
     signed long long req_size;		/* values passed in the URI to override the server's */
+    signed long long req_body;		/* remaining body to be consumed from the request */
     int req_code;
     int req_cache, req_time;
     int req_bodylen;
@@ -2045,6 +2046,7 @@ int event_accept(int fd) {
 	s->srv = NULL;
 	s->uri = NULL;
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
+	s->req_body = 0;
 	s->req_chunked = 0;
 	s->req_nosplice = 0;
 	s->req_random = 0;
@@ -2522,8 +2524,10 @@ int process_cli(struct session *t) {
 			t->req_size = t->req_size * (CHUNK_LEN * 2) + 3;
 		}
 	    }
-	    else if (t->ka < 2) { // keep-alive/close not forced
-		if (strncasecmp(req->h, "connection:", 11) == 0) {
+	    else {
+		/* headers */
+		if (t->ka < 2 &&  // keep-alive/close not forced
+		    strncasecmp(req->h, "connection:", 11) == 0) {
 		    char *p = req->h + 12;
 
 		    while (p < req->lr && (*p == ' ' || *p == '\t'))
@@ -2532,6 +2536,15 @@ int process_cli(struct session *t) {
 			t->ka = 0;
 		    else if (*p == 'k' || *p == 'K') // keep-alive
 			t->ka = 1;
+		}
+		else if (!t->req_body && strncasecmp(req->h, "content-length:", 15) == 0) {
+		    char *p = req->h + 16;
+
+		    while (p < req->lr && (*p == ' ' || *p == '\t'))
+			p++;
+		    t->req_body = atol(p);
+		    if (t->req_body < 0)
+			t->req_body = 0;
 		}
 	    }
 
