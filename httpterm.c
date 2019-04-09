@@ -2670,9 +2670,21 @@ int process_cli(struct session *t) {
 		if ((rep->l == 0 && t->to_write == 0)) {
 		    if (t->ka & 1) {
 			c = t->cli_state = CL_STHEADERS;
-			req->lr = req->r = req->data;
-			req->l = 0;
+			req->h = req->r = req->lr = req->w = req->data;
+			req->rlim = req->data + BUFSIZE - MAXREWRITE;
+			req->total = 0;
+			t->res_cr = t->res_cw  = RES_SILENT;
+			t->srv = NULL;
 			t->uri = NULL; // parse again
+			t->req_code = t->req_size = t->req_cache = t->req_time = -1;
+			t->req_chunked = 0;
+			t->req_nosplice = 0;
+			t->req_random = 0;
+			t->req_pieces = 0;
+			t->req_bodylen = 1;
+			t->logs.tv_accept = now;
+			t->logs.t_request = -1;
+			t->logs.t_queue = -1;
 			goto loop;
 		    }
 		    /* this is the end */
