@@ -2750,6 +2750,7 @@ int process_cli(struct session *t) {
 			req->h = req->r = req->lr = req->w = req->data;
 			req->rlim = req->data + BUFSIZE - MAXREWRITE;
 			req->total = 0;
+			t->ka = 0;
 			t->res_cr = t->res_cw  = RES_SILENT;
 			t->srv = NULL;
 			t->uri = NULL; // parse again
