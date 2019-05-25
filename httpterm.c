@@ -2263,42 +2263,45 @@ static inline void srv_return_page(struct session *t) {
 	t->to_write = 0;
     }
     else {
-	if (!t->req_chunked) {
-	    hlen = sprintf(t->rep->data,
-			   "HTTP/1.1 %03d\r\n"
-			   "Connection: %s\r\n"
-			   "%sContent-length: %lld\r\n"
-			   "%s"
-			   "X-req: size=%ld, time=%ld ms\r\n"
-			   "X-rsp: id=%s, code=%d, cache=%d, size=%lld, time=%d ms (%ld real)\r\n"
-			   "\r\n",
-			   t->req_code,
-			   (t->ka & 1) ? "keep-alive" : "close",
-			   t->req_bodylen ? "" : "X-",
-			   t->req_size,
-			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
-			   (long)t->req->total, t->logs.t_request,
-			   srv->id, t->req_code, t->req_cache,
-			   t->req_size, t->req_time,
-			   t->logs.t_queue - t->logs.t_request);
+	hlen  = 0;
+
+	//hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "HTTP/1.1 %03d\r\n", t->req_code);
+	memcpy(t->rep->data + hlen, "HTTP/1.1 000\r\n", 14);
+	t->rep->data[hlen+ 9] = ((t->req_code / 100) % 10) + '0';
+	t->rep->data[hlen+10] = ((t->req_code /  10) % 10) + '0';
+	t->rep->data[hlen+11] = ((t->req_code /   1) % 10) + '0';
+	hlen += 14;
+
+	if (t->ka & 1) {
+	    memcpy(t->rep->data + hlen, "Connection: keep-alive\r\n", 24);
+	    hlen += 24;
+	} else {
+	    memcpy(t->rep->data + hlen, "Connection: close\r\n", 19);
+	    hlen += 19;
 	}
-	else {
-	    hlen = sprintf(t->rep->data,
-			   "HTTP/1.1 %03d\r\n"
-			   "Connection: %s\r\n"
-			   "Transfer-Encoding: chunked\r\n"
-			   "%s"
-			   "X-req: size=%ld, time=%ld ms\r\n"
-			   "X-rsp: id=%s, code=%d, cache=%d, chunked, size=%lld, time=%d ms (%ld real)\r\n"
-			   "\r\n",
-			   t->req_code,
-			   (t->ka & 1) ? "keep-alive" : "close",
-			   t->req_cache ? "" : "Cache-Control: no-cache\r\n",
-			   (long)t->req->total, t->logs.t_request,
-			   srv->id, t->req_code, t->req_cache,
-			   t->req_size, t->req_time,
-			   t->logs.t_queue - t->logs.t_request);
+
+	if (t->req_chunked) {
+	    memcpy(t->rep->data + hlen, "Transfer-Encoding: chunked\r\n", 28);
+	    hlen += 28;
 	}
+	else if (t->req_bodylen || (t->ka & 1)) {
+	    hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "Content-length: %lld\r\n", t->req_size);
+	}
+
+	if (!t->req_cache) {
+	    memcpy(t->rep->data + hlen, "Cache-Control: no-cache\r\n", 25);
+	    hlen += 25;
+	}
+
+	hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen,
+			 "X-req: size=%ld, time=%ld ms\r\n"
+			 "X-rsp: id=%s, code=%d, cache=%d,%s size=%lld, time=%d ms (%ld real)\r\n"
+			 "\r\n",
+			 (long)t->req->total, t->logs.t_request,
+			 srv->id, t->req_code, t->req_cache,
+			 t->req_chunked ? " chunked," : "",
+			 t->req_size, t->req_time,
+			 t->logs.t_queue - t->logs.t_request);
 	t->to_write = t->req_size;
 	t->rep->l = hlen;
 	t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
