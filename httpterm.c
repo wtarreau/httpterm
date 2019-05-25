@@ -453,7 +453,7 @@ struct session {
     int cli_fd;				/* the client side fd */
     int cli_state;			/* state of the client side */
     int sock_st;			/* socket states : SKST_S[CS][RW] */
-    int ka;				/* non-zero = keep-alive */
+    int ka;				/* .0: keep-alive  .1: forced  .2: http/1.1 */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
     unsigned long long to_write;	/* #of response data bytes to write after headers */
@@ -2267,15 +2267,17 @@ static inline void srv_return_page(struct session *t) {
 
 	//hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "HTTP/1.1 %03d\r\n", t->req_code);
 	memcpy(t->rep->data + hlen, "HTTP/1.1 000\r\n", 14);
+	if (!(t->ka & 4)) // HTTP/1.0
+	    t->rep->data[hlen+ 7] = '0';
 	t->rep->data[hlen+ 9] = ((t->req_code / 100) % 10) + '0';
 	t->rep->data[hlen+10] = ((t->req_code /  10) % 10) + '0';
 	t->rep->data[hlen+11] = ((t->req_code /   1) % 10) + '0';
 	hlen += 14;
 
-	if (t->ka & 1) {
+	if ((t->ka & 5) == 1) { // HTTP/1.0 + KA
 	    memcpy(t->rep->data + hlen, "Connection: keep-alive\r\n", 24);
 	    hlen += 24;
-	} else {
+	} else if ((t->ka & 5) == 4) { // HTTP/1.1 + close
 	    memcpy(t->rep->data + hlen, "Connection: close\r\n", 19);
 	    hlen += 19;
 	}
@@ -2456,7 +2458,7 @@ int process_cli(struct session *t) {
 
 		/* keep-alive by default for HTTP/1.1 */
 		if (*(ptr-1) == '1')
-		    t->ka = 1;
+		    t->ka = 5; /* 1.1 + KA by default */
 
 		/* we'll check for the following URIs :
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
@@ -2504,10 +2506,10 @@ int process_cli(struct session *t) {
 				t->req_cache = result << mult;
 				break;
 			    case 'C':
-				t->ka = 2 | !result;  // forced OFF
+				t->ka = (t->ka & 4) | 2 | !result;  // forced OFF
 				break;
 			    case 'K':
-				t->ka = 2 | !!result; // forced ON
+				t->ka = (t->ka & 4) | 2 | !!result; // forced ON
 				break;
 			    case 'k':
 				t->req_chunked = result;
@@ -2549,16 +2551,16 @@ int process_cli(struct session *t) {
 	    }
 	    else {
 		/* headers */
-		if (t->ka < 2 &&  // keep-alive/close not forced
+		if (!(t->ka & 2) &&  // keep-alive/close not forced
 		    strncasecmp(req->h, "connection:", 11) == 0) {
 		    char *p = req->h + 12;
 
 		    while (p < req->lr && (*p == ' ' || *p == '\t'))
 			p++;
 		    if (*p == 'c' || *p == 'C') // close
-			t->ka = 0;
+			t->ka = (t->ka & 4) | 0;
 		    else if (*p == 'k' || *p == 'K') // keep-alive
-			t->ka = 1;
+			t->ka = (t->ka & 4) | 1;
 		}
 		else if (!t->req_body && strncasecmp(req->h, "content-length:", 15) == 0) {
 		    char *p = req->h + 16;
