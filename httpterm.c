@@ -1711,8 +1711,8 @@ int event_cli_write(int fd) {
 	}
 
 	if (s->req_pieces) {
-	    if (max > 4096) {
-		max = 4096;
+	    if (max > s->req_pieces) {
+		max = s->req_pieces;
 		max = (((unsigned long long)max * ((rand() >> 8) & 0xFFFF)) >> 16) + 1;
 	    }
 	}
