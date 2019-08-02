@@ -695,7 +695,7 @@ const char *HTTP_HELP =
 	"\r\n"
 	"HTTPTerm-" HTTPTERM_VERSION " - " HTTPTERM_DATE "\n"
 	"The following arguments are supported to override the default objects :\n"
-	" - /?s=<size>[kmg]   return <size> bytes (may be kB, MB, GB).\n"
+	" - /?s=<size>[kmgr]  return <size> bytes (may be kB, MB, GB, r=random).\n"
 	"                     E.g. /?s=20k\n"
 	" - /?r=<retcode>     present <retcode> as the HTTP return code.\n"
 	"                     E.g. /?r=404\n"
@@ -707,7 +707,7 @@ const char *HTTP_HELP =
 	"                     E.g. /?K=1\n"
 	" - /?b=<bodylen>     advertise the body length in content-length if not zero.\n"
 	"                     E.g. /?b=0\n"
-	" - /?t=<time>        wait <time> milliseconds before responding.\n"
+	" - /?t=<time>[kmgr]  wait <time> milliseconds before responding.\n"
 	"                     E.g. /?t=500\n"
 	" - /?k={0|1}         Enable transfer encoding chunked with 1 byte chunks\n"
 	" - /?S={0|1}         Disable/enable use of splice() to send data\n"
@@ -2467,6 +2467,7 @@ int process_cli(struct session *t) {
 		if ((next = strchr(t->uri, '?')) != NULL) {
 		    char *arg;
 		    long result, mult;
+		    int use_rand;
 
 		    next += 1;
 		    arg = next;
@@ -2476,6 +2477,7 @@ int process_cli(struct session *t) {
 		    }
 
 		    while (arg + 2 <= ptr && arg[1] == '=') {
+			use_rand = 0;
 			result = strtol(arg + 2, &next, 0);
 			if (next > arg + 2) {
 			    mult = 0;
@@ -2486,10 +2488,15 @@ int process_cli(struct session *t) {
 				    mult += 20;
 				else if (*next == 'g' || *next == 'G')
 				    mult += 30;
+				else if (*next == 'r' || *next == 'R')
+				    use_rand=1;
 				else
 				    break;
 				next++;
 			    } while (*next);
+
+			    if (use_rand)
+				    result = ((long long)random() * result) / ((long long)RAND_MAX + 1);
 
 			    switch (*arg) {
 			    case 's':
