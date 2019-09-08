@@ -2773,6 +2773,8 @@ int process_cli(struct session *t) {
 			t->logs.tv_accept = now;
 			t->logs.t_request = -1;
 			t->logs.t_queue = -1;
+			if (t->proxy->clitimeout)
+				tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
 			goto loop;
 		    }
 		    /* this is the end */
