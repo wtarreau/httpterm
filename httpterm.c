@@ -471,6 +471,7 @@ struct session {
     int req_code;
     int req_cache, req_time;
     int req_bodylen;
+    int req_maxbody;
     int req_chunked;
     int req_nosplice;
     int req_random;
@@ -707,6 +708,8 @@ const char *HTTP_HELP =
 	"                     E.g. /?K=1\n"
 	" - /?b=<bodylen>     advertise the body length in content-length if not zero.\n"
 	"                     E.g. /?b=0\n"
+	" - /?B=<maxbody>     read no more than this amount of body before responding.\n"
+	"                     E.g. /?B=10000\n"
 	" - /?t=<time>[kmgr]  wait <time> milliseconds before responding.\n"
 	"                     E.g. /?t=500\n"
 	" - /?k={0|1}         Enable transfer encoding chunked with 1 byte chunks\n"
@@ -2053,6 +2056,7 @@ int event_accept(int fd) {
 	s->req_random = 0;
 	s->req_pieces = 0;
 	s->req_bodylen = 1;
+	s->req_maxbody = -1;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2524,6 +2528,9 @@ int process_cli(struct session *t) {
 			    case 'b':
 				t->req_bodylen = result;
 				break;
+			    case 'B':
+				t->req_maxbody = result;
+				break;
 			    case 'S':
 				t->req_nosplice = !result;
 				break;
@@ -2577,6 +2584,10 @@ int process_cli(struct session *t) {
 		    t->req_body = atol(p);
 		    if (t->req_body < 0)
 			t->req_body = 0;
+
+		    /* we may want to limit the amount of body to consume before responding */
+		    if (t->req_maxbody >= 0 && (long long)t->req_maxbody < t->req_body)
+			    t->req_body = t->req_maxbody;
 		}
 	    }
 
@@ -2773,6 +2784,7 @@ int process_cli(struct session *t) {
 			t->req_random = 0;
 			t->req_pieces = 0;
 			t->req_bodylen = 1;
+			t->req_maxbody = -1;
 			t->logs.tv_accept = now;
 			t->logs.t_request = -1;
 			t->logs.t_queue = -1;
