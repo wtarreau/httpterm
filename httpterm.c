@@ -453,7 +453,7 @@ struct session {
     int cli_fd;				/* the client side fd */
     int cli_state;			/* state of the client side */
     int sock_st;			/* socket states : SKST_S[CS][RW] */
-    int ka;				/* .0: keep-alive  .1: forced  .2: http/1.1 */
+    int ka;				/* .0: keep-alive  .1: forced  .2: http/1.1, .3: was_reused */
     struct buffer *req;			/* request buffer */
     struct buffer *rep;			/* response buffer */
     unsigned long long to_write;	/* #of response data bytes to write after headers */
@@ -2619,7 +2619,10 @@ int process_cli(struct session *t) {
 
 	    /* read timeout : give up with an error message.
 	     */
-	    client_retnclose(t, t->proxy->errmsg.len408, t->proxy->errmsg.msg408);
+	    if (t->ka & 8)
+		client_retnclose(t, 0, "");
+	    else
+		client_retnclose(t, t->proxy->errmsg.len408, t->proxy->errmsg.msg408);
 	    return 1;
 	}
 
@@ -2759,7 +2762,7 @@ int process_cli(struct session *t) {
 			req->h = req->r = req->lr = req->w = req->data;
 			req->rlim = req->data + BUFSIZE - MAXREWRITE;
 			req->total = 0;
-			t->ka = 0;
+			t->ka = 8; // reused connection
 			t->res_cr = t->res_cw  = RES_SILENT;
 			t->srv = NULL;
 			t->uri = NULL; // parse again
