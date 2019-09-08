@@ -1936,11 +1936,12 @@ void client_retnclose(struct session *s, int len, const char *msg) {
  * The reply buffer doesn't need to be empty before this.
  */
 void client_return(struct session *s, int len, const char *msg) {
+    FD_SET(s->cli_fd, StaticWriteEvent);
+    tv_delayfrom(&s->cwexpire, &now, s->proxy->clitimeout);
     strcpy(s->rep->data, msg);
     s->rep->l = len;
     s->rep->r = s->rep->h = s->rep->lr = s->rep->w = s->rep->data;
     s->rep->r += len;
-    s->req->l = 0;
 }
 
 
@@ -2329,6 +2330,7 @@ int process_cli(struct session *t) {
     int c = t->cli_state;
     struct buffer *req = t->req;
     struct buffer *rep = t->rep;
+    int expect = 0;
     long extra;
 
  loop:
@@ -2387,6 +2389,11 @@ int process_cli(struct session *t) {
 
 		if (t->req_time < 0)
 		    t->req_time = t->srv->resp_time;
+
+		if (expect) {
+			/* some clients (e.g. curl) send expect by default */
+			client_return(t, 25, "HTTP/1.1 100-continue\r\n\r\n");
+		}
 
 		if (t->req_body) {
 		    /* we have to wait for the rest of the body to come */
@@ -2588,6 +2595,9 @@ int process_cli(struct session *t) {
 		    /* we may want to limit the amount of body to consume before responding */
 		    if (t->req_maxbody >= 0 && (long long)t->req_maxbody < t->req_body)
 			    t->req_body = t->req_maxbody;
+		}
+		else if (strncasecmp(req->h, "expect:", 7) == 0) {
+			expect = 1;
 		}
 	    }
 
