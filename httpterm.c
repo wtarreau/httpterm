@@ -1862,11 +1862,13 @@ int event_cli_write(int fd) {
 	    
 	    s->res_cw = RES_DATA;
 	    if (s->req_pieces) {
-		if (s->to_write) {
+		/* do not loop */
+		int rnd = (rand() >> 16) & 15;
+		if (s->to_write && rnd) {
 		    s->cli_state = CL_STPAUSE;
 		    FD_CLR(s->cli_fd, StaticWriteEvent);
 		    /* pause between 1 and 256 ms */
-		    tv_delayfrom(&s->cnexpire, &now, 4 << ((rand() >> 16) & 7));
+		    tv_delayfrom(&s->cnexpire, &now, rnd);
 		}
 	    }
 	    else if (--max_loops > 0)
