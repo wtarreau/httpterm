@@ -469,7 +469,7 @@ struct session {
     signed long long req_size;		/* values passed in the URI to override the server's */
     signed long long req_body;		/* remaining body to be consumed from the request */
     int req_code;
-    int req_cache, req_time;
+    int req_cache, req_time, ka_time;
     int req_bodylen;
     int req_maxbody;
     int req_chunked;
@@ -712,6 +712,8 @@ const char *HTTP_HELP =
 	"                     E.g. /?B=10000\n"
 	" - /?t=<time>[kmgr]  wait <time> milliseconds before responding.\n"
 	"                     E.g. /?t=500\n"
+	" - /?w=<time>[kmgr]  use keep-alive time <time> milliseconds.\n"
+	"                     E.g. /?w=1000\n"
 	" - /?k={0|1}         Enable transfer encoding chunked with 1 byte chunks\n"
 	" - /?S={0|1}         Disable/enable use of splice() to send data\n"
 	" - /?R={0|1}         Disable/enable sending random data (disables splicing)\n"
@@ -2053,6 +2055,7 @@ int event_accept(int fd) {
 	s->srv = NULL;
 	s->uri = NULL;
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
+	s->ka_time = -1;
 	s->req_body = 0;
 	s->req_chunked = 0;
 	s->req_nosplice = 0;
@@ -2522,6 +2525,9 @@ int process_cli(struct session *t) {
 			    case 't':
 				t->req_time = result << mult;
 				break;
+			    case 'w':
+				t->ka_time = result << mult;
+				break;
 			    case 'c':
 				t->req_cache = result << mult;
 				break;
@@ -2781,6 +2787,8 @@ int process_cli(struct session *t) {
 	    } else {
 		if ((rep->l == 0 && t->to_write == 0)) {
 		    if (t->ka & 1) {
+			int wait_time = (t->ka_time >= 0) ? t->ka_time : t->proxy->clitimeout;
+
 			c = t->cli_state = CL_STHEADERS;
 			req->h = req->r = req->lr = req->w = req->data;
 			req->rlim = req->data + BUFSIZE - MAXREWRITE;
@@ -2790,6 +2798,7 @@ int process_cli(struct session *t) {
 			t->srv = NULL;
 			t->uri = NULL; // parse again
 			t->req_code = t->req_size = t->req_cache = t->req_time = -1;
+			t->ka_time = -1;
 			t->req_body = 0;
 			t->req_chunked = 0;
 			t->req_nosplice = 0;
@@ -2800,8 +2809,8 @@ int process_cli(struct session *t) {
 			t->logs.tv_accept = now;
 			t->logs.t_request = -1;
 			t->logs.t_queue = -1;
-			if (t->proxy->clitimeout)
-				tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
+			if (wait_time)
+				tv_delayfrom(&t->crexpire, &now, wait_time);
 			goto loop;
 		    }
 		    /* this is the end */
