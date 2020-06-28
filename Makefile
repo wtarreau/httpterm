@@ -70,6 +70,7 @@ DEBUG = -g
 # will avoid the additionnal paramters to overflow a page. 8030 bytes is
 # exactly 5.5 TCP segments of 1460 bytes.
 #SMALL_OPTS = -DBUFSIZE=8030 -DMAXREWRITE=1030 -DSYSTEM_MAXCONN=1024
+#SMALL_OPTS = -flto
 SMALL_OPTS =
 
 # redefine this if you want to add some special PATH to include/libs
