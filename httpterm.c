@@ -540,7 +540,6 @@ struct pipe {
 
 /*********************************************************************/
 
-int cfg_maxpconn = DEFAULT_MAXCONN;	/* # of simultaneous connections per proxy (-N) */
 int cfg_maxconn = 0;		/* # of simultaneous connections, (-n) */
 char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
@@ -751,7 +750,7 @@ void usage(char *name) {
     display_version();
     fprintf(stderr,
 	    "Usage : %s [-f <cfgfile>] [ -vdV"
-	    "D ] [ -n <maxconn> ] [ -N <maxpconn> ]\n"
+	    "D ] [ -n <maxconn> ]\n"
 	    "        [ -p <pidfile> ] [ -m <max megs> ] [ -P <pipesize in kB> ]\n"
 	    "        -v displays version\n"
 	    "        -d enters debug mode ; -db only disables background mode.\n"
@@ -761,7 +760,6 @@ void usage(char *name) {
 	    "        -c check mode : only check config file and exit\n"
 	    "        -n sets the maximum total # of connections (%d)\n"
 	    "        -m limits the usable amount of memory (in MB)\n"
-	    "        -N sets the default, per-proxy maximum # of connections (%d)\n"
 	    "        -p writes pids of all children to this file\n"
 #if defined(ENABLE_EPOLL)
 	    "        -de disables epoll() usage even when available\n"
@@ -777,7 +775,7 @@ void usage(char *name) {
 	    "        -sf/-st [pid ]* finishes/terminates old pids. Must be last arguments.\n"
 	    "        At least one of -f or -L is required.\n"
 	    "\n",
-	    name, DEFAULT_MAXCONN, cfg_maxpconn);
+	    name, DEFAULT_MAXCONN);
     exit(1);
 }
 
@@ -4347,7 +4345,7 @@ void init(int argc, char **argv) {
 		switch (*flag) {
 		case 'n' : cfg_maxconn = atol(*argv); break;
 		case 'm' : global.rlimit_memmax = atol(*argv); break;
-		case 'N' : cfg_maxpconn = atol(*argv); break;
+		case 'N' : break; // legacy, silently ignore
 		case 'f' : cfg_cfgfile = *argv; break;
 		case 'p' : cfg_pidfile = *argv; break;
 		case 'L' : cmdline_listen = *argv; break;
