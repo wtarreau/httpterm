@@ -758,7 +758,7 @@ void usage(char *name) {
 	    "        -D goes daemon ; implies -q\n"
 	    "        -q quiet mode : don't display messages\n"
 	    "        -c check mode : only check config file and exit\n"
-	    "        -n sets the maximum total # of connections (%d)\n"
+	    "        -n sets the maximum total # of connections (def: ulimit -Hn)\n"
 	    "        -m limits the usable amount of memory (in MB)\n"
 	    "        -p writes pids of all children to this file\n"
 #if defined(ENABLE_EPOLL)
@@ -775,7 +775,7 @@ void usage(char *name) {
 	    "        -sf/-st [pid ]* finishes/terminates old pids. Must be last arguments.\n"
 	    "        At least one of -f or -L is required.\n"
 	    "\n",
-	    name, DEFAULT_MAXCONN);
+	    name);
     exit(1);
 }
 
@@ -4410,8 +4410,20 @@ void init(int argc, char **argv) {
 	global.pidfile = strdup(cfg_pidfile);
     }
 
-    if (global.maxconn == 0)
-	global.maxconn = DEFAULT_MAXCONN;
+    if (global.maxconn == 0) { /* try to be optimal */
+	struct rlimit limit;
+
+	if (getrlimit(RLIMIT_NOFILE, &limit) == 0) {
+	    if (limit.rlim_max == RLIM_INFINITY)
+		limit.rlim_max = limit.rlim_cur;
+
+	    if (limit.rlim_max > global.maxsock)
+		global.maxconn = limit.rlim_max - global.maxsock;
+	}
+
+	if (!global.maxconn)
+	    global.maxconn = DEFAULT_MAXCONN;
+    }
 
     global.maxsock += global.maxconn; /* each connection needs one sockets */
 
