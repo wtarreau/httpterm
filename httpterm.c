@@ -467,10 +467,10 @@ struct session {
     char *uri;				/* the requested URI within the buffer */
     signed long long req_size;		/* values passed in the URI to override the server's */
     signed long long req_body;		/* remaining body to be consumed from the request */
+    signed long long req_maxbody;       /* max body to be read before starting to respond, -1=all */
     int req_code;
     int req_cache, req_time, ka_time;
     int req_bodylen;
-    int req_maxbody;
     int req_chunked;
     int req_nosplice;
     int req_random;
@@ -1589,14 +1589,24 @@ int event_cli_read(int fd) {
 		b->l += ret;
 		s->res_cr = RES_DATA;
 		
-		if (s->cli_state >= CL_STWAIT) {
-		    /* drain data */
-		    b->r = b->data;
-		    b->l = 0;
-		}
-
 		if (b->r == b->data + BUFSIZE) {
 		    b->r = b->data; /* wrap around the buffer */
+		}
+
+		if (s->cli_state >= CL_STWAIT) {
+		    /* drain body data */
+		    if (s->req_body) {
+			if (s->req_body > (long long)b->l) {
+			    s->req_body -= b->l;
+			    b->r = b->w = b->lr = b->data;
+			    b->l = 0;
+			} else {
+			    b->l -= s->req_body;
+			    b->w += s->req_body;
+			    if (b->w >= b->data + BUFSIZE)
+				b->w -= BUFSIZE;
+			}
+		    }
 		}
 
 		b->total += ret;
@@ -2394,7 +2404,11 @@ int process_cli(struct session *t) {
 			client_return(t, 25, "HTTP/1.1 100-continue\r\n\r\n");
 		}
 
-		if (t->req_body) {
+		/* -1 = full body */
+		if (t->req_maxbody < 0 || t->req_maxbody > t->req_body)
+		    t->req_maxbody = t->req_body;
+
+		if (t->req_maxbody) {
 		    /* we have to wait for the rest of the body to come */
 #ifdef TCP_QUICKACK
 		    /* we're going to wait, let's ACK the request */
@@ -2678,12 +2692,16 @@ int process_cli(struct session *t) {
 	req->lr = req->r = req->data;
 	req->l = 0;
 
-	if (t->req_body > (long long)extra)
+	if (t->req_maxbody > (long long)extra) {
+	    t->req_maxbody -= extra;
 	    t->req_body -= extra;
-	else
-	    t->req_body = 0;
+	}
+	else {
+	    t->req_body -= t->req_maxbody;
+	    t->req_maxbody = 0;
+	}
 
-	if (t->req_body) {
+	if (t->req_maxbody) {
 	    FD_SET(t->cli_fd, StaticReadEvent);
 	    if (t->proxy->clitimeout)
 		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
@@ -2715,7 +2733,9 @@ int process_cli(struct session *t) {
 	tv_eternity(&t->cnexpire);
 
 	/* Note: we also want to drain data */
-	FD_SET(t->cli_fd, StaticReadEvent);
+	if (t->req_body)
+	    FD_SET(t->cli_fd, StaticReadEvent);
+
 	req->lr = req->r = req->data;
 	req->l = 0;
 	if (t->proxy->clitimeout)
