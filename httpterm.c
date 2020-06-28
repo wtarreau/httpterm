@@ -409,7 +409,6 @@ static char chunk_pattern[] = "1\r\n";
 struct buffer {
     unsigned int l;			/* data length */
     char *r, *w, *h, *lr;     		/* read ptr, write ptr, last header ptr, last read */
-    char *rlim;				/* read limit, used for header rewriting */
     unsigned long long total;		/* total data read */
     char *data;
     char data_buf[BUFSIZE];
@@ -1557,19 +1556,13 @@ int event_cli_read(int fd) {
 	{
 	    if (b->l == 0) { /* let's realign the buffer to optimize I/O */
 		b->r = b->w = b->h = b->lr  = b->data;
-		max = b->rlim - b->data;
+		max = BUFSIZE;
 	    }
 	    else if (b->r > b->w) {
-		max = b->rlim - b->r;
+		max = b->data + BUFSIZE - b->r;
 	    }
 	    else {
 		max = b->w - b->r;
-		/* FIXME: theorically, if w>0, we shouldn't have rlim < data+size anymore
-		 * since it means that the rewrite protection has been removed. This
-		 * implies that the if statement can be removed.
-		 */
-		if (max > b->rlim - b->data)
-		    max = b->rlim - b->data;
 	    }
 	    
 	    if (max == 0) {  /* not anymore room to store data */
@@ -2112,9 +2105,6 @@ int event_accept(int fd) {
 	s->req->l = 0;
 	s->req->total = 0;
 	s->req->h = s->req->r = s->req->lr = s->req->w = s->req->data;	/* r and w will be reset further */
-	s->req->rlim = s->req->data + BUFSIZE;
-	if (s->cli_state == CL_STHEADERS) /* reserve some space for header rewriting */
-	    s->req->rlim -= MAXREWRITE;
 
 	if ((s->rep = pool_alloc(buffer)) == NULL) { /* no memory */
 	    pool_free(buffer, s->req);
@@ -2126,7 +2116,7 @@ int event_accept(int fd) {
 	s->rep->l = 0;
 	s->rep->total = 0;
 	s->rep->data = s->rep->data_buf;
-	s->rep->h = s->rep->r = s->rep->lr = s->rep->w = s->rep->rlim = s->rep->data;
+	s->rep->h = s->rep->r = s->rep->lr = s->rep->w = s->rep->data;
 
 	fdtab[cfd].read  = &event_cli_read;
 	fdtab[cfd].write = &event_cli_write;
@@ -2268,7 +2258,7 @@ static inline void srv_return_page(struct session *t) {
 	t->rep->data = srv->resp_data;
 	t->rep->l = srv->resp_size;
 	t->rep->r = srv->resp_data + t->rep->l;
-	t->rep->h = t->rep->lr = t->rep->w = t->rep->rlim = t->rep->data;
+	t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
 	t->to_write = 0;
     }
     else {
@@ -2334,19 +2324,21 @@ int process_cli(struct session *t) {
     int c = t->cli_state;
     struct buffer *req = t->req;
     struct buffer *rep = t->rep;
+    char *end;
     int expect = 0;
     long extra;
 
  loop:
 
+    end = req->w + req->l; // equals req->r except if r wraps
     if (c == CL_STHEADERS) {
 	/* now parse the partial (or complete) headers */
-	while (req->lr < req->r) { /* this loop only sees one header at each iteration */
+	while (req->lr < end) { /* this loop only sees one header at each iteration */
 	    char *ptr;
 	    ptr = req->lr;
 
 	    /* look for the end of the current header */
-	    while (ptr < req->r && *ptr != '\n' && *ptr != '\r')
+	    while (ptr < end && *ptr != '\n' && *ptr != '\r')
 		ptr++;
 	    
 	    if (ptr == req->h) { /* empty line, end of headers */
@@ -2356,7 +2348,7 @@ int process_cli(struct session *t) {
 		 */
 		if (req->h == req->data) {
 		    /* to get a complete header line, we need the ending \r\n, \n\r, \r or \n too */
-		    if (ptr > req->r - 2) {
+		    if (ptr > end - 2) {
 			/* this is a partial header, let's wait for more to come */
 			req->lr = ptr;
 			break;
@@ -2383,7 +2375,10 @@ int process_cli(struct session *t) {
 		else
 		    req->lr = ptr + 2; /* \r\n or \n\r */
 
-		req->rlim = req->data + BUFSIZE; /* no more rewrite needed */
+		/* consume the header block */
+		req->w = req->lr;
+		req->l = end - req->w;
+
 		t->logs.t_request = tv_diff(&t->logs.tv_accept, &now);
 
 		t->srv = get_server_rr(t->proxy);
@@ -2435,7 +2430,7 @@ int process_cli(struct session *t) {
 	    }
 
 	    /* to get a complete header line, we need the ending \r\n, \n\r, \r or \n too */
-	    if (ptr > req->r - 2) {
+	    if (ptr > end - 2) {
 		/* this is a partial header, let's wait for more to come */
 		req->lr = ptr;
 		break;
@@ -2618,13 +2613,13 @@ int process_cli(struct session *t) {
 	 * request is larger than the request buffer, let's simply ignore
 	 * remaining headers and go on.
 	 */
-	if (req->l >= req->rlim - req->data)
+	if (req->l >= BUFSIZE)
 	    goto end_of_request;
 
-	if ((req->l < req->rlim - req->data) && ! FD_ISSET(t->cli_fd, StaticReadEvent)) {
+	if ((req->l < BUFSIZE) && ! FD_ISSET(t->cli_fd, StaticReadEvent)) {
 	    /* fd in StaticReadEvent was disabled, perhaps because of a previous buffer
 	     * full. We cannot loop here since event_cli_read will disable it only if
-	     * req->l == rlim-data
+	     * req->l == BUFSIZE
 	     */
 	    FD_SET(t->cli_fd, StaticReadEvent);
 	    if (t->proxy->clitimeout)
@@ -2753,7 +2748,7 @@ int process_cli(struct session *t) {
 		shutdown(t->cli_fd, SHUT_RD);
 	    }
 	    else {
-		if (req->l >= req->rlim - req->data) {
+		if (req->l >= BUFSIZE) {
 		    /* no room to read more data */
 		    if (FD_ISSET(t->cli_fd, StaticReadEvent)) {
 			/* stop reading until we get some space */
@@ -2790,7 +2785,6 @@ int process_cli(struct session *t) {
 
 			c = t->cli_state = CL_STHEADERS;
 			req->h = req->r = req->lr = req->w = req->data;
-			req->rlim = req->data + BUFSIZE - MAXREWRITE;
 			req->total = 0;
 			t->ka = 8; // reused connection
 			t->res_cr = t->res_cw  = RES_SILENT;
