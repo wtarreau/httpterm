@@ -78,9 +78,7 @@ ADDLIB =
 
 # set some defines when needed.
 # Known ones are -DENABLE_POLL, -DENABLE_EPOLL, and -DUSE_MY_EPOLL
-# - use -DSTATTIME=0 to disable statistics, else specify an interval in
-#   milliseconds.
-DEFINE = -DSTATTIME=0
+DEFINE =
 
 # global options
 TARGET_OPTS=$(COPTS.$(TARGET))
