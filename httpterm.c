@@ -2318,12 +2318,39 @@ static inline void srv_return_page(struct session *t) {
 	t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
 	t->rep->r += hlen;
     }
-    t->req->l = 0;
 
     if (event_cli_write(t->cli_fd) < 0)
 	FD_SET(t->cli_fd, StaticWriteEvent);
 }
 
+void buffer_slow_realign(struct buffer *buf)
+{
+    char *end = buf->data + BUFSIZE;
+    int off   = buf->data + BUFSIZE - buf->w;
+
+    /* two possible cases :
+     *   - the buffer is in one contiguous block, we move it in-place
+     *   - the buffer is in two blocks, we move it via the trash
+     */
+    if (buf->l) {
+	int block1 = buf->l;
+	int block2 = 0;
+	if (buf->r <= buf->w) {
+	    /* non-contiguous block */
+	    block1 = buf->data + BUFSIZE - buf->w;
+	    block2 = buf->r - buf->data;
+	}
+	if (block2)
+	    memcpy(trash, buf->data, block2);
+	memmove(buf->data, buf->w, block1);
+	if (block2)
+	    memcpy(buf->data + block1, trash, block2);
+    }
+
+    /* adjust all known pointers */
+    buf->w    = buf->data;
+    buf->r   += off; if (buf->r   >= end) buf->r   -= BUFSIZE;
+}
 
 /*
  * manages the client FSM and its socket. BTW, it also tries to handle the
@@ -2431,8 +2458,6 @@ int process_cli(struct session *t) {
 		    setsockopt(t->cli_fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
 #endif
 		    FD_SET(t->cli_fd, StaticReadEvent);
-		    req->lr = req->r = req->data;
-		    req->l = 0;
 		    return 1;
 		}
 
@@ -2625,7 +2650,8 @@ int process_cli(struct session *t) {
 
 	/* horrible hack : we're not interested in headers here anyway, so if a
 	 * request is larger than the request buffer, let's simply ignore
-	 * remaining headers and go on.
+	 * remaining headers and go on. This will break pipelining on large
+	 * requests.
 	 */
 	if (req->l >= BUFSIZE)
 	    goto end_of_request;
@@ -2688,27 +2714,30 @@ int process_cli(struct session *t) {
 	    return 1;
 	}
     consume_body:
-	extra = req->data + req->l - req->lr;
-	req->lr = req->r = req->data;
-	req->l = 0;
-
+	extra = req->l;
 	if (t->req_maxbody > (long long)extra) {
 	    t->req_maxbody -= extra;
 	    t->req_body -= extra;
-	}
-	else {
-	    t->req_body -= t->req_maxbody;
-	    t->req_maxbody = 0;
-	}
-
-	if (t->req_maxbody) {
+	    req->lr = req->r = req->w = req->data;
+	    req->l = 0;
+	    /* continue to read */
 	    FD_SET(t->cli_fd, StaticReadEvent);
 	    if (t->proxy->clitimeout)
 		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
 	    return 0;
 	}
-	/* fall back to common processing. Yeah I know, spaghetti code. */
-	goto end_of_request_body;
+	else {
+	    t->req_body -= t->req_maxbody;
+	    req->l -= t->req_maxbody;
+	    req->w += t->req_maxbody;
+	    if (req->w >= req->data + BUFSIZE)
+		req->w -= BUFSIZE;
+	    req->lr = req->w;
+	    t->req_maxbody = 0;
+	    /* fall back to common processing. Yeah I know, spaghetti code. */
+	    goto end_of_request_body;
+
+	}
     }
     else if (c == CL_STWAIT) {
 	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_ERROR))
@@ -2736,8 +2765,6 @@ int process_cli(struct session *t) {
 	if (t->req_body)
 	    FD_SET(t->cli_fd, StaticReadEvent);
 
-	req->lr = req->r = req->data;
-	req->l = 0;
 	if (t->proxy->clitimeout)
 	    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
 
@@ -2804,7 +2831,13 @@ int process_cli(struct session *t) {
 			int wait_time = (t->ka_time >= 0) ? t->ka_time : t->proxy->clitimeout;
 
 			c = t->cli_state = CL_STHEADERS;
-			req->h = req->r = req->lr = req->w = req->data;
+			if (!req->l) {
+			    req->r = req->w = req->data;
+			} else if (req->w != req->data) {
+			    /* we need to realign */
+			    buffer_slow_realign(req);
+			}
+			req->h = req->lr = req->data;
 			req->total = 0;
 			t->ka = 8; // reused connection
 			t->res_cr = t->res_cw  = RES_SILENT;
