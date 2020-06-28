@@ -106,6 +106,9 @@
 #define SOCK_NONBLOCK   0x800
 #endif
 
+/* it seems optimal to come back quickly into the epoll loop */
+#define MAX_EVENTS      64
+
 /* We'll try to enable SO_REUSEPORT on Linux 2.4 and 2.6 if not defined.
  * There are two families of values depending on the architecture. Those
  * are at least valid on Linux 2.4 and 2.6, reason why we'll rely on the
@@ -3169,8 +3172,8 @@ int epoll_loop(int action) {
 	  }		  
       }
       
-      /* now let's wait for events */
-      status = epoll_wait(epoll_fd, epoll_events, maxfd, next_time);
+      /* now let's wait for events and process just a few at once */
+      status = epoll_wait(epoll_fd, epoll_events, MAX_EVENTS, next_time);
       tv_now(&now);
 
       for (count = 0; count < status; count++) {
