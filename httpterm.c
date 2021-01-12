@@ -183,6 +183,9 @@ static _syscall4(long, tee, int, fd_in, int, fd_out, size_t, len, unsigned int, 
 #define BUFSIZE		4096
 #endif
 
+/* no splicing below one page */
+#define MIN_SPLICE 4096
+
 // reserved buffer space for header rewriting. Must not be zero
 // otherwise some requests don't get parsed !
 #ifndef MAXREWRITE
@@ -1684,27 +1687,34 @@ int event_cli_write(int fd) {
 		unsigned int offset;
 		char *buffer;
 		size_t buffer_len;
-		int modulo;
 
+		max = s->to_write;
 		if (s->req_chunked) {
-		    buffer = common_chunk_resp;
-		    buffer_len = sizeof(common_chunk_resp);
-		    modulo = CHUNK_LEN;
+		    if (s->to_write > 5) {
+			/* regular chunk, last 5 bytes are reserved for 0CRLFCRLF */
+			buffer = common_chunk_resp;
+			buffer_len = sizeof(common_chunk_resp);
+			offset = (s->req_size - s->to_write) % CHUNK_LEN;
+			max = s->to_write - 5;
+		    } else {
+			/* final chunk */
+			buffer = "0\r\n\r\n";
+			buffer_len = 5;
+			offset = 5 - s->to_write;
+		    }
 		}
 		else if (s->req_random) {
 		    buffer = random_resp;
 		    buffer_len = random_resp_len;
-		    modulo = random_resp_len;
+		    offset = (s->req_size - s->to_write) % random_resp_len;
 		}
 		else {
 		    buffer = common_response;
 		    buffer_len = sizeof(common_response);
-		    modulo = 50;
+		    offset = (s->req_size - s->to_write) % 50;
 		}
 
-		offset = (s->req_size - s->to_write) % modulo;
 		data_ptr = buffer + offset;
-		max = s->to_write;
 		if (max > (unsigned long long)(buffer_len - offset))
 		    max = (unsigned long long)buffer_len - offset;
 
@@ -1739,7 +1749,7 @@ int event_cli_write(int fd) {
 #else
 	ret = max;
 #ifdef ENABLE_SPLICE
-	if (!b->l && !(global.flags & GFLAGS_NO_SPLICE) && !s->req_nosplice) {
+	if (!b->l && max >= MIN_SPLICE && !(global.flags & GFLAGS_NO_SPLICE) && !s->req_nosplice) {
 	    /* dummy data only */
 	    if (!s->req_chunked) {
 
@@ -1822,8 +1832,8 @@ int event_cli_write(int fd) {
 		}
 
 		if (p->usage) {
-		    /* left the final 3 octet 0\r\n */
-		    ret = splice(p->pipe[0], NULL, fd, NULL, s->to_write - 3, SPLICE_F_NONBLOCK|((s->ka & 1) ? 0 : SPLICE_F_MORE));
+		    /* always splice_f_more with chunked as we'll send() the 5 final bytes */
+		    ret = splice(p->pipe[0], NULL, fd, NULL, max, SPLICE_F_NONBLOCK|((s->ka & 1 && !s->req_chunked) ? 0 : SPLICE_F_MORE));
 		    if (ret > 0) {
 			p->usage -= ret;
 			max = 0;
@@ -1853,16 +1863,6 @@ int event_cli_write(int fd) {
 	    } else {
 		/* we were working on dummy data */
 		s->to_write -= ret;
-
-		/* in chunked mode, switch to "standard" data for sending
-		 * the 3 final digits, followed by a last \r\n for trailers.
-		 */
-		if (s->to_write == 3) {
-		    s->to_write = 0;
-		    s->rep->l = 5;
-		    s->rep->r = s->rep->h = s->rep->lr = s->rep->w = "0\r\n\r\n";
-		    s->rep->r += 5;
-		}
 	    }
 	    
 	    s->res_cw = RES_DATA;
@@ -2604,12 +2604,12 @@ int process_cli(struct session *t) {
 			    break;
 		    }
 
-		    /* when chunk mode is required, the size is adjusted by the
-		     * chunk encoding overhead. each chunk contain 1 data byte.
-		     * the final 3 bytes are for the "0\r\n"
+		    /* When chunk mode is required, the size is adjusted by the
+		     * chunk encoding overhead. Each chunk contains 1 data byte.
+		     * the final 5 bytes are for the "0\r\n\r\n".
 		     */
 		    if (t->req_chunked)
-			t->req_size = t->req_size * (CHUNK_LEN * 2) + 3;
+			t->req_size = t->req_size * (CHUNK_LEN * 2) + 5;
 		}
 	    }
 	    else {
