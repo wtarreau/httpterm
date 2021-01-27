@@ -239,6 +239,27 @@ static _syscall4(long, tee, int, fd_in, int, fd_out, size_t, len, unsigned int, 
 /* returns 1 only if only zero or one bit is set in X, which means that X is a
  * power of 2, and 0 otherwise */
 #define POWEROF2(x) (((x) & ((x)-1)) == 0)
+
+/* Redefine fd_isset, fd_set, and fd_clr to work around bogus glibc
+ * version which purposely break it past 1023 while older versions work
+ * pretty fine just like any other operating system.
+ */
+static inline int my_fd_isset(int fd, const fd_set *set)
+{
+    return (((const unsigned int *)set)[fd >> 5] >> (fd & 31)) & 1;
+}
+
+static inline void my_fd_set(int fd, fd_set *set)
+{
+    ((unsigned int *)set)[fd >> 5] |= 1 << (fd & 31);
+}
+
+static inline void my_fd_clr(int fd, fd_set *set)
+{
+    ((unsigned int *)set)[fd >> 5] &= ~(1 << (fd & 31));
+}
+
+
 /*
  * copies at most <size-1> chars from <src> to <dst>. Last char is always
  * set to 0, unless <size> is 0. The number of chars copied is returned
@@ -1282,12 +1303,12 @@ static inline struct timeval *tv_min(struct timeval *tvmin,
  * The file descriptor is also closed.
  */
 static void fd_delete(int fd) {
-    FD_CLR(fd, StaticReadEvent);
-    FD_CLR(fd, StaticWriteEvent);
+    my_fd_clr(fd, StaticReadEvent);
+    my_fd_clr(fd, StaticWriteEvent);
 #if defined(ENABLE_EPOLL)
     if (PrevReadEvent) {
-	FD_CLR(fd, PrevReadEvent);
-	FD_CLR(fd, PrevWriteEvent);
+	my_fd_clr(fd, PrevReadEvent);
+	my_fd_clr(fd, PrevWriteEvent);
     }
 #endif
 
@@ -1570,7 +1591,7 @@ int event_cli_read(int fd) {
 	    }
 	    
 	    if (max == 0) {  /* not anymore room to store data */
-		FD_CLR(fd, StaticReadEvent);
+		my_fd_clr(fd, StaticReadEvent);
 		break;
 	    }
 	    
@@ -1640,7 +1661,7 @@ int event_cli_read(int fd) {
     }
 
     if (s->res_cr != RES_SILENT) {
-	if (s->proxy->clitimeout && FD_ISSET(fd, StaticReadEvent))
+	if (s->proxy->clitimeout && my_fd_isset(fd, StaticReadEvent))
 	    tv_delayfrom(&s->crexpire, &now, s->proxy->clitimeout);
 	else
 	    tv_eternity(&s->crexpire);
@@ -1723,7 +1744,7 @@ int event_cli_write(int fd) {
 		    s->res_cw = RES_NULL;
 		task_wakeup(&rq, t);
 		tv_eternity(&s->cwexpire);
-		FD_CLR(fd, StaticWriteEvent);
+		my_fd_clr(fd, StaticWriteEvent);
 		return 0;
 	    }
 	}
@@ -1871,7 +1892,7 @@ int event_cli_write(int fd) {
 		int rnd = (rand() >> 16) & 15;
 		if (s->to_write && rnd) {
 		    s->cli_state = CL_STPAUSE;
-		    FD_CLR(s->cli_fd, StaticWriteEvent);
+		    my_fd_clr(s->cli_fd, StaticWriteEvent);
 		    /* pause between 1 and 256 ms */
 		    tv_delayfrom(&s->cnexpire, &now, rnd);
 		}
@@ -1924,8 +1945,8 @@ int event_cli_write(int fd) {
  * The reply buffer doesn't need to be empty before this.
  */
 void client_retnclose(struct session *s, int len, const char *msg) {
-    FD_CLR(s->cli_fd, StaticReadEvent);
-    FD_SET(s->cli_fd, StaticWriteEvent);
+    my_fd_clr(s->cli_fd, StaticReadEvent);
+    my_fd_set(s->cli_fd, StaticWriteEvent);
     tv_eternity(&s->crexpire);
     tv_delayfrom(&s->cwexpire, &now, s->proxy->clitimeout);
     shutdown(s->cli_fd, SHUT_RD);
@@ -1943,7 +1964,7 @@ void client_retnclose(struct session *s, int len, const char *msg) {
  * The reply buffer doesn't need to be empty before this.
  */
 void client_return(struct session *s, int len, const char *msg) {
-    FD_SET(s->cli_fd, StaticWriteEvent);
+    my_fd_set(s->cli_fd, StaticWriteEvent);
     tv_delayfrom(&s->cwexpire, &now, s->proxy->clitimeout);
     strcpy(s->rep->data, msg);
     s->rep->l = len;
@@ -2012,7 +2033,7 @@ int event_accept(int fd) {
 
 	if ((s = pool_alloc(session)) == NULL) { /* disable this proxy for a while */
 	    Alert("out of memory in event_accept().\n");
-	    FD_CLR(fd, StaticReadEvent);
+	    my_fd_clr(fd, StaticReadEvent);
 	    p->state = PR_STIDLE;
 	    close(cfd);
 	    return 0;
@@ -2020,7 +2041,7 @@ int event_accept(int fd) {
 
 	if ((t = pool_alloc(task)) == NULL) { /* disable this proxy for a while */
 	    Alert("out of memory in event_accept().\n");
-	    FD_CLR(fd, StaticReadEvent);
+	    my_fd_clr(fd, StaticReadEvent);
 	    p->state = PR_STIDLE;
 	    close(cfd);
 	    pool_free(session, s);
@@ -2135,7 +2156,7 @@ int event_accept(int fd) {
 	fdtab[cfd].state = FD_STREADY;
 
 	if (event_cli_read(cfd) < 0)
-	    FD_SET(cfd, StaticReadEvent);
+	    my_fd_set(cfd, StaticReadEvent);
 
 	setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
 
@@ -2146,9 +2167,9 @@ int event_accept(int fd) {
 	tv_eternity(&s->cwexpire);
 
 	if (s->proxy->clitimeout) {
-	    if (FD_ISSET(cfd, StaticReadEvent))
+	    if (my_fd_isset(cfd, StaticReadEvent))
 		tv_delayfrom(&s->crexpire, &now, s->proxy->clitimeout);
-	    if (FD_ISSET(cfd, StaticWriteEvent))
+	    if (my_fd_isset(cfd, StaticWriteEvent))
 		tv_delayfrom(&s->cwexpire, &now, s->proxy->clitimeout);
 	}
 
@@ -2321,7 +2342,7 @@ static inline void srv_return_page(struct session *t) {
     }
 
     if (event_cli_write(t->cli_fd) < 0)
-	FD_SET(t->cli_fd, StaticWriteEvent);
+	my_fd_set(t->cli_fd, StaticWriteEvent);
 }
 
 void buffer_slow_realign(struct buffer *buf)
@@ -2458,7 +2479,7 @@ int process_cli(struct session *t) {
 		    /* we're going to wait, let's ACK the request */
 		    setsockopt(t->cli_fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &one, sizeof(one));
 #endif
-		    FD_SET(t->cli_fd, StaticReadEvent);
+		    my_fd_set(t->cli_fd, StaticReadEvent);
 		    return 1;
 		}
 
@@ -2657,12 +2678,12 @@ int process_cli(struct session *t) {
 	if (req->l >= BUFSIZE)
 	    goto end_of_request;
 
-	if ((req->l < BUFSIZE) && ! FD_ISSET(t->cli_fd, StaticReadEvent)) {
+	if ((req->l < BUFSIZE) && ! my_fd_isset(t->cli_fd, StaticReadEvent)) {
 	    /* fd in StaticReadEvent was disabled, perhaps because of a previous buffer
 	     * full. We cannot loop here since event_cli_read will disable it only if
 	     * req->l == BUFSIZE
 	     */
-	    FD_SET(t->cli_fd, StaticReadEvent);
+	    my_fd_set(t->cli_fd, StaticReadEvent);
 	    if (t->proxy->clitimeout)
 		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
 	    else
@@ -2701,7 +2722,7 @@ int process_cli(struct session *t) {
 	    t->sock_st |= SKST_SCR;
 	    if (t->sock_st & SKST_SCW)
 		goto terminate_client;
-	    FD_CLR(t->cli_fd, StaticReadEvent);
+	    my_fd_clr(t->cli_fd, StaticReadEvent);
 	    tv_eternity(&t->crexpire);
 	    fd_delete(t->cli_fd);
 	    t->cli_state = CL_STCLOSE;
@@ -2722,7 +2743,7 @@ int process_cli(struct session *t) {
 	    req->lr = req->r = req->w = req->data;
 	    req->l = 0;
 	    /* continue to read */
-	    FD_SET(t->cli_fd, StaticReadEvent);
+	    my_fd_set(t->cli_fd, StaticReadEvent);
 	    if (t->proxy->clitimeout)
 		tv_delayfrom(&t->crexpire, &now, t->proxy->clitimeout);
 	    return 0;
@@ -2749,7 +2770,7 @@ int process_cli(struct session *t) {
 	    t->sock_st |= SKST_SCR;
 	    if (t->sock_st & SKST_SCW)
 		goto terminate_client;
-	    FD_CLR(t->cli_fd, StaticReadEvent);
+	    my_fd_clr(t->cli_fd, StaticReadEvent);
 	    tv_eternity(&t->crexpire);
 	    shutdown(t->cli_fd, SHUT_RD);
 	}
@@ -2764,7 +2785,7 @@ int process_cli(struct session *t) {
 
 	/* Note: we also want to drain data */
 	if (t->req_body)
-	    FD_SET(t->cli_fd, StaticReadEvent);
+	    my_fd_set(t->cli_fd, StaticReadEvent);
 
 	if (t->proxy->clitimeout)
 	    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
@@ -2791,23 +2812,23 @@ int process_cli(struct session *t) {
 		t->sock_st |= SKST_SCR;
 		if (t->sock_st & SKST_SCW)
 		    goto terminate_client;
-		FD_CLR(t->cli_fd, StaticReadEvent);
+		my_fd_clr(t->cli_fd, StaticReadEvent);
 		tv_eternity(&t->crexpire);
 		shutdown(t->cli_fd, SHUT_RD);
 	    }
 	    else {
 		if (req->l >= BUFSIZE) {
 		    /* no room to read more data */
-		    if (FD_ISSET(t->cli_fd, StaticReadEvent)) {
+		    if (my_fd_isset(t->cli_fd, StaticReadEvent)) {
 			/* stop reading until we get some space */
-			FD_CLR(t->cli_fd, StaticReadEvent);
+			my_fd_clr(t->cli_fd, StaticReadEvent);
 			tv_eternity(&t->crexpire);
 		    }
 		}
 		else {
 		    /* there's still some space in the buffer */
-		    if (! FD_ISSET(t->cli_fd, StaticReadEvent)) {
-			FD_SET(t->cli_fd, StaticReadEvent);
+		    if (! my_fd_isset(t->cli_fd, StaticReadEvent)) {
+			my_fd_set(t->cli_fd, StaticReadEvent);
 			if (!t->proxy->clitimeout)
 			    tv_eternity(&t->crexpire);
 			else
@@ -2823,7 +2844,7 @@ int process_cli(struct session *t) {
 		t->sock_st |= SKST_SCW;
 		if (t->sock_st & SKST_SCR)
 		    goto terminate_client;
-		FD_CLR(t->cli_fd, StaticWriteEvent);
+		my_fd_clr(t->cli_fd, StaticWriteEvent);
 		tv_eternity(&t->cwexpire);
 		shutdown(t->cli_fd, SHUT_WR);
 	    } else {
@@ -2870,8 +2891,8 @@ int process_cli(struct session *t) {
 		    goto terminate_client;
 		}
 		else { /* buffer not empty */
-		    if (! FD_ISSET(t->cli_fd, StaticWriteEvent)) {
-			FD_SET(t->cli_fd, StaticWriteEvent); /* restart writing */
+		    if (! my_fd_isset(t->cli_fd, StaticWriteEvent)) {
+			my_fd_set(t->cli_fd, StaticWriteEvent); /* restart writing */
 			if (t->proxy->clitimeout) {
 			    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
 			    /* FIXME: to prevent the client from expiring read timeouts during writes,
@@ -2896,7 +2917,7 @@ int process_cli(struct session *t) {
 	    t->sock_st |= SKST_SCR;
 	    if (t->sock_st & SKST_SCW)
 		goto terminate_client;
-	    FD_CLR(t->cli_fd, StaticReadEvent);
+	    my_fd_clr(t->cli_fd, StaticReadEvent);
 	    tv_eternity(&t->crexpire);
 	    shutdown(t->cli_fd, SHUT_RD);
 	}
@@ -2908,7 +2929,7 @@ int process_cli(struct session *t) {
 	tv_eternity(&t->cnexpire);
 
 	/* Note: we also want to drain data */
-	FD_SET(t->cli_fd, StaticWriteEvent);
+	my_fd_set(t->cli_fd, StaticWriteEvent);
 	if (t->proxy->clitimeout)
 	    tv_delayfrom(&t->cwexpire, &now, t->proxy->clitimeout);
 	goto restart_data;
@@ -3106,16 +3127,16 @@ int epoll_loop(int action) {
 		  sr = (rn >> count) & 1;
 		  sw = (wn >> count) & 1;
 #else
-		  pr = FD_ISSET(fd&((1<<INTBITS)-1), (typeof(fd_set*))&ro);
-		  pw = FD_ISSET(fd&((1<<INTBITS)-1), (typeof(fd_set*))&wo);
-		  sr = FD_ISSET(fd&((1<<INTBITS)-1), (typeof(fd_set*))&rn);
-		  sw = FD_ISSET(fd&((1<<INTBITS)-1), (typeof(fd_set*))&wn);
+		  pr = my_fd_isset(fd&((1<<INTBITS)-1), (typeof(fd_set*))&ro);
+		  pw = my_fd_isset(fd&((1<<INTBITS)-1), (typeof(fd_set*))&wo);
+		  sr = my_fd_isset(fd&((1<<INTBITS)-1), (typeof(fd_set*))&rn);
+		  sw = my_fd_isset(fd&((1<<INTBITS)-1), (typeof(fd_set*))&wn);
 #endif
 #else
-		  pr = FD_ISSET(fd, PrevReadEvent);
-		  pw = FD_ISSET(fd, PrevWriteEvent);
-		  sr = FD_ISSET(fd, StaticReadEvent);
-		  sw = FD_ISSET(fd, StaticWriteEvent);
+		  pr = my_fd_isset(fd, PrevReadEvent);
+		  pw = my_fd_isset(fd, PrevWriteEvent);
+		  sr = my_fd_isset(fd, StaticReadEvent);
+		  sw = my_fd_isset(fd, StaticWriteEvent);
 #endif
 		  if (!((sr^pr) | (sw^pw)))
 		      continue;
@@ -3177,14 +3198,14 @@ int epoll_loop(int action) {
       for (count = 0; count < status; count++) {
 	  fd = epoll_events[count].data.fd;
 
-	  if (FD_ISSET(fd, StaticReadEvent)) {
+	  if (my_fd_isset(fd, StaticReadEvent)) {
 		  if (fdtab[fd].state == FD_STCLOSE)
 			  continue;
 		  if (epoll_events[count].events & ( EPOLLIN | EPOLLERR | EPOLLHUP ))
 			  fdtab[fd].read(fd);
 	  }
 
-	  if (FD_ISSET(fd, StaticWriteEvent)) {
+	  if (my_fd_isset(fd, StaticWriteEvent)) {
 		  if (fdtab[fd].state == FD_STCLOSE)
 			  continue;
 		  if (epoll_events[count].events & ( EPOLLOUT | EPOLLERR | EPOLLHUP ))
@@ -3261,12 +3282,12 @@ int poll_loop(int action) {
 		  sr = (rn >> count) & 1;
 		  sw = (wn >> count) & 1;
 #else
-		  sr = FD_ISSET(fd&((1<<INTBITS)-1), (typeof(fd_set*))&rn);
-		  sw = FD_ISSET(fd&((1<<INTBITS)-1), (typeof(fd_set*))&wn);
+		  sr = my_fd_isset(fd&((1<<INTBITS)-1), (typeof(fd_set*))&rn);
+		  sw = my_fd_isset(fd&((1<<INTBITS)-1), (typeof(fd_set*))&wn);
 #endif
 #else
-		  sr = FD_ISSET(fd, StaticReadEvent);
-		  sw = FD_ISSET(fd, StaticWriteEvent);
+		  sr = my_fd_isset(fd, StaticReadEvent);
+		  sw = my_fd_isset(fd, StaticWriteEvent);
 #endif
 		  if ((sr|sw)) {
 		      poll_events[nbfd].fd = fd;
@@ -3290,14 +3311,14 @@ int poll_loop(int action) {
 	  /* ok, we found one active fd */
 	  status--;
 
-	  if (FD_ISSET(fd, StaticReadEvent)) {
+	  if (my_fd_isset(fd, StaticReadEvent)) {
 		  if (fdtab[fd].state == FD_STCLOSE)
 			  continue;
 		  if (poll_events[count].revents & ( POLLIN | POLLERR | POLLHUP ))
 			  fdtab[fd].read(fd);
 	  }
 	  
-	  if (FD_ISSET(fd, StaticWriteEvent)) {
+	  if (my_fd_isset(fd, StaticWriteEvent)) {
 		  if (fdtab[fd].state == FD_STCLOSE)
 			  continue;
 		  if (poll_events[count].revents & ( POLLOUT | POLLERR | POLLHUP ))
@@ -3378,9 +3399,9 @@ int select_loop(int action) {
 
       //	/* just a verification code, needs to be removed for performance */
       //	for (i=0; i<maxfd; i++) {
-      //	    if (FD_ISSET(i, ReadEvent) != FD_ISSET(i, StaticReadEvent))
+      //	    if (my_fd_isset(i, ReadEvent) != my_fd_isset(i, StaticReadEvent))
       //		abort();
-      //	    if (FD_ISSET(i, WriteEvent) != FD_ISSET(i, StaticWriteEvent))
+      //	    if (my_fd_isset(i, WriteEvent) != my_fd_isset(i, StaticWriteEvent))
       //		abort();
       //	    
       //	}
@@ -3409,13 +3430,13 @@ int select_loop(int action) {
 		      /* if we specify read first, the accepts and zero reads will be
 		       * seen first. Moreover, system buffers will be flushed faster.
 		       */
-			  if (FD_ISSET(fd, ReadEvent)) {
+			  if (my_fd_isset(fd, ReadEvent)) {
 				  if (fdtab[fd].state == FD_STCLOSE)
 					  continue;
 				  fdtab[fd].read(fd);
 			  }
 
-			  if (FD_ISSET(fd, WriteEvent)) {
+			  if (my_fd_isset(fd, WriteEvent)) {
 				  if (fdtab[fd].state == FD_STCLOSE)
 					  continue;
 				  fdtab[fd].write(fd);
@@ -4594,7 +4615,7 @@ int start_proxies(int verbose) {
 	    fdtab[fd].write = NULL; /* never called */
 	    fdtab[fd].owner = (struct task *)curproxy; /* reference the proxy instead of a task */
 	    fdtab[fd].state = FD_STLISTEN;
-	    FD_SET(fd, StaticReadEvent);
+	    my_fd_set(fd, StaticReadEvent);
 	    fd_insert(fd);
 	    listeners++;
 	}
