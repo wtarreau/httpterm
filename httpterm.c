@@ -565,6 +565,7 @@ struct pipe {
 /*********************************************************************/
 
 int cfg_maxconn = 0;		/* # of simultaneous connections, (-n) */
+int cfg_sndbuf = 0;             /* socket send buffer size in bytes (-B) */
 char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
 int  pid;			/* current process id */
@@ -773,8 +774,7 @@ void display_version() {
 void usage(char *name) {
     display_version();
     fprintf(stderr,
-	    "Usage : %s [-f <cfgfile>] [ -vdV"
-	    "D ] [ -n <maxconn> ]\n"
+	    "Usage : %s [-f <cfgfile>] [ -vdVD ] [ -n <maxconn> ] [ -B <size> ]\n"
 	    "        [ -p <pidfile> ] [ -m <max megs> ] [ -P <pipesize in kB> ]\n"
 	    "        -v displays version\n"
 	    "        -d enters debug mode ; -db only disables background mode.\n"
@@ -785,6 +785,7 @@ void usage(char *name) {
 	    "        -n sets the maximum total # of connections (def: ulimit -Hn)\n"
 	    "        -m limits the usable amount of memory (in MB)\n"
 	    "        -p writes pids of all children to this file\n"
+	    "        -B limits the kernel-side socket sndbuf size (in bytes)\n"
 #if defined(ENABLE_EPOLL)
 	    "        -de disables epoll() usage even when available\n"
 #endif
@@ -2059,6 +2060,9 @@ int event_accept(int fd) {
 
 	if (p->options & PR_O_TCP_CLI_KA)
 	    setsockopt(cfd, SOL_SOCKET, SO_KEEPALIVE, (char *) &one, sizeof(one));
+
+	if (cfg_sndbuf > 0)
+	    setsockopt(cfd, SOL_SOCKET, SO_SNDBUF, &cfg_sndbuf, sizeof(cfg_sndbuf));
 
 	t->next = t->prev = t->rqnext = NULL; /* task not in run queue yet */
 	t->wq = LIST_HEAD(wait_queue[0]); /* but already has a wait queue assigned */
@@ -4373,6 +4377,7 @@ void init(int argc, char **argv) {
 #if defined(ENABLE_SPLICE)
 		case 'P' : pipesize = atol(*argv) * 1024; break;
 #endif
+		case 'B' : cfg_sndbuf = atoi(*argv); break;
 		default: usage(old_argv);
 		}
 	    }
