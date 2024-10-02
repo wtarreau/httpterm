@@ -491,6 +491,7 @@ struct session {
 	long  t_queue;			/* delay before the session gets out of the connect queue, -1 if never occurs */
     } logs;
     unsigned int uniq_id;		/* unique ID used for the traces */
+    unsigned int etag;			/* e-tag to produce is not zero */
     char *uri;				/* the requested URI within the buffer */
     signed long long req_size;		/* values passed in the URI to override the server's */
     signed long long req_body;		/* remaining body to be consumed from the request */
@@ -739,6 +740,7 @@ const char *HTTP_HELP =
 	"                     E.g. /?B=10000\n"
 	" - /?t=<time>        wait <time> milliseconds before responding.\n"
 	"                     E.g. /?t=500\n"
+	" - /?e=<enable>      Enable sending of the Etag header if >0 (for use with caches).\n"
 	" - /?k=<enable>      Enable transfer encoding chunked with 1 byte chunks if >0.\n"
 	" - /?S=<enable>      Disable use of splice() to send data if <1.\n"
 	" - /?R=<enable>      Enable sending random data if >0 (disables splicing).\n"
@@ -2082,6 +2084,7 @@ int event_accept(int fd) {
 	s->cli_fd = cfd;
 	s->srv = NULL;
 	s->uri = NULL;
+	s->etag = 0;
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
 	s->ka_time = -1;
 	s->req_body = 0;
@@ -2330,6 +2333,9 @@ static inline void srv_return_page(struct session *t) {
 	    hlen += 25;
 	}
 
+	if (t->etag)
+	    hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "Etag: %08x\r\n", t->etag);
+
 	hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen,
 			 "X-req: size=%ld, time=%ld ms\r\n"
 			 "X-rsp: id=%s, code=%d, cache=%d,%s size=%lld, time=%d ms (%ld real)\r\n"
@@ -2522,6 +2528,7 @@ int process_cli(struct session *t) {
 	    /* right now we have a full header line */
 	    if (!t->uri) {
 		char *next;
+
 		t->uri = req->h;
 		*ptr = '\0';
 
@@ -2599,6 +2606,9 @@ int process_cli(struct session *t) {
 			    case 'k':
 				t->req_chunked = result;
 				break;
+			    case 'e':
+				t->etag = result; // non-zero will enable calculation
+				break;
 			    case 'b':
 				t->req_bodylen = result;
 				break;
@@ -2635,6 +2645,43 @@ int process_cli(struct session *t) {
 		     */
 		    if (t->req_chunked)
 			t->req_size = t->req_size * (CHUNK_LEN * 2) + 5;
+
+		    /* calculate the e-tag using the value as a hash starting point,
+		     * by checksumming the request starting at the URI. The result
+		     * reinjects the carry so it may never be zero at the end, i.e.
+		     * it's used both as a flag and a value.
+		     */
+		    if (t->etag) {
+			unsigned long long hash = t->etag;
+			const char *p = t->uri + 1;
+
+			while (*p && *p++ != ' ')
+			    ;
+
+			/* we'll read 32-bit words in big-endian mode from t->uri to ptr-1 included */
+			while (p + 4 <= ptr) {
+			    const union {  uint32_t u32; } __attribute__((packed))*u = (const void *)p;
+			    hash += ntohl(u->u32);
+			    p += 4;
+			}
+
+			/* 1 char at a time to finish */
+			switch (ptr - p) {
+			case 3: hash += (unsigned int)(unsigned char)ptr[-3] << 24;
+			    /* fall through */
+			case 2: hash += (unsigned int)(unsigned char)ptr[-2] << 16;
+			    /* fall through */
+			case 1: hash += (unsigned int)(unsigned char)ptr[-1] << 8;
+			    /* fall through */
+			default:
+			    break;
+			}
+
+			/* reinject carry */
+			hash = ((unsigned int)hash) + (hash >> 32);
+			hash = ((unsigned int)hash) + (hash >> 32);
+			t->etag = hash;
+		    }
 		}
 	    }
 	    else {
@@ -2869,6 +2916,7 @@ int process_cli(struct session *t) {
 			t->res_cr = t->res_cw  = RES_SILENT;
 			t->srv = NULL;
 			t->uri = NULL; // parse again
+			t->etag = 0;
 			t->req_code = t->req_size = t->req_cache = t->req_time = -1;
 			t->ka_time = -1;
 			t->req_body = 0;
