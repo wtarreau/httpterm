@@ -1784,7 +1784,7 @@ int event_cli_write(int fd) {
 
 		if (slave_pipe_usage) {
 		    /* we need to release data from the pipe before calling tee() */
-		    ret = splice(slave_pipe[0], NULL, fd, NULL, s->to_write, SPLICE_F_NONBLOCK|(((s->ka & 1) && (max >= s->to_write)) ? 0 : SPLICE_F_MORE));
+		    ret = splice(slave_pipe[0], NULL, fd, NULL, max, SPLICE_F_NONBLOCK|(((s->ka & 1) && (max >= s->to_write)) ? 0 : SPLICE_F_MORE));
 		    if (ret > 0) {
 			slave_pipe_usage -= ret;
 			max = 0;
