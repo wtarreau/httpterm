@@ -1834,12 +1834,12 @@ int event_cli_write(int fd) {
 			p->stop_alignment = align;
 		    }
 		    else if (p->usage < shift) { /* reset */
-			read(p->pipe[0], buf, p->usage);
+			(void)!read(p->pipe[0], buf, p->usage);
 			p->usage = 0;
 			p->stop_alignment = align;
 		    }
 		    else {
-			read(p->pipe[0], buf, shift);
+			(void)!read(p->pipe[0], buf, shift);
 			p->usage -= shift;
 		    }
 		    p->start_alignment = align;
@@ -2130,7 +2130,7 @@ int event_accept(int fd) {
 			      pn, ntohs(((struct sockaddr_in6 *)(&s->cli_addr))->sin6_port));
 	    }
 
-	    write(1, trash, len);
+	    (void)!write(1, trash, len);
 	}
 
 	if ((s->req = pool_alloc(buffer)) == NULL) { /* no memory */
@@ -2522,7 +2522,7 @@ int process_cli(struct session *t) {
 		UBOUND(max, sizeof(trash) - len - 1);
 		len += strlcpy2(trash + len, req->h, max + 1);
 		trash[len++] = '\n';
-		write(1, trash, len);
+		(void)!write(1, trash, len);
 	    }
 
 	    /* right now we have a full header line */
@@ -2990,7 +2990,7 @@ int process_cli(struct session *t) {
 	if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	    int len;
 	    len = sprintf(trash, "%08x:%s.clicls[%04x:%04x]\n", t->uniq_id, t->proxy->id, (unsigned short)t->cli_fd, (unsigned short)-1);
-	    write(1, trash, len);
+	    (void)!write(1, trash, len);
 	}
 	return 0;
     }
@@ -3031,7 +3031,7 @@ int process_session(struct task *t) {
     if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 	int len;
 	len = sprintf(trash, "%08x:%s.closed[%04x:%04x]\n", s->uniq_id, s->proxy->id, (unsigned short)s->cli_fd, (unsigned short)-1);
-	write(1, trash, len);
+	(void)!write(1, trash, len);
     }
 
     /* the task MUST not be in the run queue anymore */
@@ -4808,7 +4808,7 @@ int main(int argc, char **argv) {
 	if (chroot(global.chroot) == -1) {
 	    Alert("[%s.main()] Cannot chroot(%s).\n", argv[0], global.chroot);
 	}
-	chdir("/");
+	(void)!chdir("/");
     }
 
     /* ulimits */
