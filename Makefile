@@ -50,6 +50,14 @@ LIBS.linux22 =
 COPTS.solaris = -fomit-frame-pointer -DENABLE_POLL -DFD_SETSIZE=65536
 LIBS.solaris = -lnsl -lsocket
 
+# This is for FreeBSD (will only use poll() though)
+COPTS.freebsd = -DENABLE_POLL -DENABLE_ACCEPT4
+LIBS.freebsd =
+
+# This is for a default platform that only uses poll()
+COPTS.default = -DENABLE_POLL
+LIBS.default =
+
 # CPU dependant optimizations
 COPTS.generic = -O2 -fwrapv
 COPTS.i586 = -O2 -march=i586
