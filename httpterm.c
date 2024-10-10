@@ -729,6 +729,7 @@ const char *HTTP_HELP =
 	"HTTPTerm-" HTTPTERM_VERSION " - " HTTPTERM_DATE "\n"
 	"All integer argument values are in the form [digits]*[kmgr] (r=random(0..1)).\n"
 	"The following arguments are supported to override the default objects :\n"
+	" - /? or /?h         show this help.\n"
 	" - /?s=<size>        return <size> bytes.\n"
 	"                     E.g. /?s=20k\n"
 	" - /?r=<retcode>     present <retcode> as the HTTP return code.\n"
@@ -2549,7 +2550,7 @@ int process_cli(struct session *t) {
 
 		/* we'll check for the following URIs :
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
-		 * /? to get the help page.
+		 * /? or /?h to get the help page.
 		 */
 		if ((next = strchr(t->uri, '?')) != NULL) {
 		    char *arg;
@@ -2558,7 +2559,7 @@ int process_cli(struct session *t) {
 
 		    next += 1;
 		    arg = next;
-		    if (next == ptr || *next == ' ') {
+		    if (next == ptr || *next == ' ' || *next == 'h') {
 			client_retnclose(t, strlen(HTTP_HELP), HTTP_HELP);
 			return 1;
 		    }
