@@ -501,9 +501,9 @@ struct session {
     signed long long req_size;		/* values passed in the URI to override the server's */
     signed long long req_body;		/* remaining body to be consumed from the request */
     signed long long req_maxbody;       /* max body to be read before starting to respond, -1=all */
+    signed long long req_bodylen;       /* <0:advertise CL; 0:don't; >0: advertise this bodylen */
     int req_code;
     int req_cache, req_time, ka_time;
-    int req_bodylen;
     int req_chunked;
     int req_nosplice;
     int req_random;
@@ -740,8 +740,8 @@ const char *HTTP_HELP =
 	"                     E.g. /?C=1\n"
 	" - /?K=<keep-alive>  force the response to use keep-alive if >0.\n"
 	"                     E.g. /?K=1\n"
-	" - /?b=<bodylen>     advertise the body length in content-length if >0.\n"
-	"                     E.g. /?b=0\n"
+	" - /?b=<bodylen>     <0: send content-length; 0: don't; >0: send this value.\n"
+	"                     E.g. /?b=0   /?b=100k\n"
 	" - /?B=<maxbody>     read no more than this amount of body before responding.\n"
 	"                     E.g. /?B=10000\n"
 	" - /?t=<time>        wait <time> milliseconds before responding.\n"
@@ -2098,7 +2098,7 @@ int event_accept(int fd) {
 	s->req_nosplice = 0;
 	s->req_random = 0;
 	s->req_pieces = 0;
-	s->req_bodylen = 1;
+	s->req_bodylen = -1; // default: advertise the correct size
 	s->req_maxbody = -1;
 
 	s->logs.tv_accept = now;
@@ -2331,7 +2331,7 @@ static inline void srv_return_page(struct session *t) {
 	    hlen += 28;
 	}
 	else if (t->req_bodylen || (t->ka & 1)) {
-	    hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "Content-length: %lld\r\n", t->req_size);
+	    hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "Content-length: %lld\r\n", (t->req_bodylen > 0) ? t->req_bodylen : t->req_size);
 	}
 
 	if (!t->req_cache) {
@@ -2930,7 +2930,7 @@ int process_cli(struct session *t) {
 			t->req_nosplice = 0;
 			t->req_random = 0;
 			t->req_pieces = 0;
-			t->req_bodylen = 1;
+			t->req_bodylen = -1;
 			t->req_maxbody = -1;
 			t->logs.tv_accept = now;
 			t->logs.t_request = -1;
