@@ -214,6 +214,11 @@ static _syscall4(long, tee, int, fd_in, int, fd_out, size_t, len, unsigned int, 
 #define DEFAULT_MAXCONN	SYSTEM_MAXCONN
 #endif
 
+/* per-proxy maxconn. Doesn't fix any allocation size, only an accept limit */
+#ifndef DEFAULT_MAXPCONN
+#define DEFAULT_MAXPCONN    (1<<30)
+#endif
+
 /* how many bits are needed to code the size of an int (eg: 32bits -> 5) */
 #define	INTBITS		5
 
@@ -3668,7 +3673,7 @@ void init_default_instance() {
     defproxy.state = PR_STNEW;
     defproxy.maxconn = cfg_maxconn ? cfg_maxconn : global.maxconn;
     if (!defproxy.maxconn)
-	defproxy.maxconn = DEFAULT_MAXCONN;
+	defproxy.maxconn = DEFAULT_MAXPCONN;
 }
 
 /*
