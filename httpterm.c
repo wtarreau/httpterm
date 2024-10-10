@@ -503,7 +503,7 @@ struct session {
     signed long long req_maxbody;       /* max body to be read before starting to respond, -1=all */
     signed long long req_bodylen;       /* <0:advertise CL; 0:don't; >0: advertise this bodylen */
     int req_code;
-    int req_cache, req_time, ka_time;
+    int req_cache, req_time, ka_time, pause_time;
     int req_chunked;
     int req_nosplice;
     int req_random;
@@ -748,6 +748,7 @@ const char *HTTP_HELP =
 	"                     E.g. /?t=500 , /?t=10k for 10.24s , /?t=5000r for 0..5s\n"
 	" - /?w=<time>        use keep-alive time <time> milliseconds.\n"
 	"                     E.g. /?w=1000\n"
+	" - /?P=<time>        pause <time> milliseconds after responding (may delay close).\n"
 	" - /?e=<enable>      Enable sending of the Etag header if >0 (for use with caches).\n"
 	" - /?k=<enable>      Enable transfer encoding chunked with 1 byte chunks if >0.\n"
 	" - /?S=<enable>      Disable use of splice() to send data if <1.\n"
@@ -2094,7 +2095,7 @@ int event_accept(int fd) {
 	s->uri = NULL;
 	s->etag = 0;
 	s->req_code = s->req_size = s->req_cache = s->req_time = -1;
-	s->ka_time = -1;
+	s->ka_time = s->pause_time = -1;
 	s->req_body = 0;
 	s->req_chunked = 0;
 	s->req_nosplice = 0;
@@ -2602,6 +2603,9 @@ int process_cli(struct session *t) {
 			    case 'w':
 				t->ka_time = result << mult;
 				break;
+			    case 'P':
+				t->pause_time = result << mult;
+				break;
 			    case 'c':
 				t->req_cache = result << mult;
 				break;
@@ -2908,6 +2912,16 @@ int process_cli(struct session *t) {
 		shutdown(t->cli_fd, SHUT_WR);
 	    } else {
 		if ((rep->l == 0 && t->to_write == 0)) {
+		    if (t->pause_time > 0) {
+			/* pause before finishing */
+			t->cli_state = CL_STPAUSE;
+			my_fd_clr(t->cli_fd, StaticWriteEvent);
+			tv_delayfrom(&t->cnexpire, &now, t->pause_time);
+			/* we'll get back here, we don't want to loop */
+			t->pause_time = 0;
+			goto pause_now;
+		    }
+
 		    if (t->ka & 1) {
 			int wait_time = (t->ka_time >= 0) ? t->ka_time : t->proxy->clitimeout;
 
@@ -2926,7 +2940,7 @@ int process_cli(struct session *t) {
 			t->uri = NULL; // parse again
 			t->etag = 0;
 			t->req_code = t->req_size = t->req_cache = t->req_time = -1;
-			t->ka_time = -1;
+			t->ka_time = t->pause_time = -1;
 			t->req_body = 0;
 			t->req_chunked = 0;
 			t->req_nosplice = 0;
@@ -2969,6 +2983,7 @@ int process_cli(struct session *t) {
 	return 0; /* other cases change nothing */
     }
     else if (c == CL_STPAUSE) {
+    pause_now:
 	if (!(t->sock_st & SKST_SCR) && (t->res_cr == RES_ERROR))
 	    goto terminate_client;
 
