@@ -20,8 +20,8 @@ CPU = generic
 #CPU = ultrasparc
 
 # tools options
-CC = gcc
-LD = gcc
+CC = cc
+LD = $(CC)
 
 # This is for recent Linux 2.6 with splice and accept4()
 COPTS.linux26s = -DENABLE_POLL -DENABLE_EPOLL -DENABLE_SPLICE -DENABLE_ACCEPT4
