@@ -51,7 +51,7 @@ COPTS.solaris = -fomit-frame-pointer -DENABLE_POLL -DFD_SETSIZE=65536
 LIBS.solaris = -lnsl -lsocket
 
 # CPU dependant optimizations
-COPTS.generic = -O2
+COPTS.generic = -O2 -fwrapv
 COPTS.i586 = -O2 -march=i586
 COPTS.i686 = -O2 -march=i686
 COPTS.ultrasparc = -O6 -mcpu=v9 -mtune=ultrasparc
