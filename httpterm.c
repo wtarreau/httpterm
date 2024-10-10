@@ -746,6 +746,8 @@ const char *HTTP_HELP =
 	"                     E.g. /?B=10000\n"
 	" - /?t=<time>        wait <time> milliseconds before responding.\n"
 	"                     E.g. /?t=500 , /?t=10k for 10.24s , /?t=5000r for 0..5s\n"
+	" - /?w=<time>        use keep-alive time <time> milliseconds.\n"
+	"                     E.g. /?w=1000\n"
 	" - /?e=<enable>      Enable sending of the Etag header if >0 (for use with caches).\n"
 	" - /?k=<enable>      Enable transfer encoding chunked with 1 byte chunks if >0.\n"
 	" - /?S=<enable>      Disable use of splice() to send data if <1.\n"
