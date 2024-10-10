@@ -585,12 +585,12 @@ struct fdtab *fdtab = NULL;	/* array of all the file descriptors */
 struct task *rq = NULL;		/* global run queue */
 struct task wait_queue[2] = {	/* global wait queue */
     {
-	prev:LIST_HEAD(wait_queue[0]),  /* expirable tasks */
-	next:LIST_HEAD(wait_queue[0]),
+	.prev = LIST_HEAD(wait_queue[0]),  /* expirable tasks */
+	.next = LIST_HEAD(wait_queue[0]),
     },
     {
-	prev:LIST_HEAD(wait_queue[1]),  /* non-expirable tasks */
-	next:LIST_HEAD(wait_queue[1]),
+	.prev = LIST_HEAD(wait_queue[1]),  /* non-expirable tasks */
+	.next = LIST_HEAD(wait_queue[1]),
     },
 };
 
