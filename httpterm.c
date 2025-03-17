@@ -230,6 +230,11 @@ static inline void my_fd_clr(int fd, fd_set *set)
     ((unsigned int *)set)[fd >> 5] &= ~(1 << (fd & 31));
 }
 
+static inline unsigned int read_u32(const void *p)
+{
+    const union {  unsigned int u32; } __attribute__((packed))*u = p;
+    return u->u32;
+}
 
 /*
  * unsigned long long ASCII representation
@@ -2746,9 +2751,16 @@ int process_cli(struct session *t) {
 
 		/* we'll check for the following URIs :
 		 * /?{s=<size>|r=<resp>|t=<time>|c=<cache>}[&{...}]
-		 * /? or /?h to get the help page.
+		 * /? or /?h to get the help page. We just speed up
+		 * checking for 'GET /?' and 'GET / ' to avoid strchr()
+		 * whenever possible.
 		 */
-		if ((next = strchr(t->uri, '?')) != NULL) {
+		if ((t->uri[4] == '/' && t->uri[5] == '?' &&  // "GET /?"
+		     ntohl(read_u32(t->uri)) == 0x47455420 &&
+		     (next = t->uri + 5)) ||
+		    ((t->uri[4] != '/' || t->uri[5] != ' ' || // not "GET / "
+		      ntohl(read_u32(t->uri)) != 0x47455420) &&
+		     (next = strchr(t->uri, '?')) != NULL)) {
 		    char *arg;
 		    long result, mult;
 		    int use_rand;
