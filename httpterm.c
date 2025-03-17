@@ -232,6 +232,190 @@ static inline void my_fd_clr(int fd, fd_set *set)
 
 
 /*
+ * unsigned long long ASCII representation
+ * return the number of chars written, not counting the trailing '\0' which
+ * is added. Returns zero if not enough space.
+ */
+int ulltoa(unsigned long long n, char *dst, size_t size)
+{
+    int i = 0;
+    char *res;
+
+    switch(n) {
+    case 1ULL ... 9ULL:
+	i = 0;
+	break;
+
+    case 10ULL ... 99ULL:
+	i = 1;
+	break;
+
+    case 100ULL ... 999ULL:
+	i = 2;
+	break;
+
+    case 1000ULL ... 9999ULL:
+	i = 3;
+	break;
+
+    case 10000ULL ... 99999ULL:
+	i = 4;
+	break;
+
+    case 100000ULL ... 999999ULL:
+	i = 5;
+	break;
+
+    case 1000000ULL ... 9999999ULL:
+	i = 6;
+	break;
+
+    case 10000000ULL ... 99999999ULL:
+	i = 7;
+	break;
+
+    case 100000000ULL ... 999999999ULL:
+	i = 8;
+	break;
+
+    case 1000000000ULL ... 9999999999ULL:
+	i = 9;
+	break;
+
+    case 10000000000ULL ... 99999999999ULL:
+	i = 10;
+	break;
+
+    case 100000000000ULL ... 999999999999ULL:
+	i = 11;
+	break;
+
+    case 1000000000000ULL ... 9999999999999ULL:
+	i = 12;
+	break;
+
+    case 10000000000000ULL ... 99999999999999ULL:
+	i = 13;
+	break;
+
+    case 100000000000000ULL ... 999999999999999ULL:
+	i = 14;
+	break;
+
+    case 1000000000000000ULL ... 9999999999999999ULL:
+	i = 15;
+	break;
+
+    case 10000000000000000ULL ... 99999999999999999ULL:
+	i = 16;
+	break;
+
+    case 100000000000000000ULL ... 999999999999999999ULL:
+	i = 17;
+	break;
+
+    case 1000000000000000000ULL ... 9999999999999999999ULL:
+	i = 18;
+	break;
+
+    case 10000000000000000000ULL ... ULLONG_MAX:
+	i = 19;
+	break;
+    }
+    if (i + 2 > size) // (i + 1) + '\0'
+	return 0;  // too long
+    res = dst + i + 1;
+    *res = '\0';
+    for (; i >= 0; i--) {
+	dst[i] = n % 10ULL + '0';
+	n /= 10ULL;
+    }
+    return res - dst;
+}
+
+/* same with hex */
+int ulltox(unsigned long long n, char *dst, size_t size)
+{
+    int i = 0;
+    char *res;
+
+    switch(n) {
+    case 0x1ULL ... 0xFULL:
+	i = 0;
+	break;
+
+    case 0x10ULL ... 0xFFULL:
+	i = 1;
+	break;
+
+    case 0x100ULL ... 0xFFFULL:
+	i = 2;
+	break;
+
+    case 0x1000ULL ... 0xFFFFULL:
+	i = 3;
+	break;
+
+    case 0x10000ULL ... 0xFFFFFULL:
+	i = 4;
+	break;
+
+    case 0x100000ULL ... 0xFFFFFFULL:
+	i = 5;
+	break;
+
+    case 0x1000000ULL ... 0xFFFFFFFULL:
+	i = 6;
+	break;
+
+    case 0x10000000ULL ... 0xFFFFFFFFULL:
+	i = 7;
+	break;
+
+    case 0x100000000ULL ... 0xFFFFFFFFFULL:
+	i = 8;
+	break;
+
+    case 0x1000000000ULL ... 0xFFFFFFFFFFULL:
+	i = 9;
+	break;
+
+    case 0x10000000000ULL ... 0xFFFFFFFFFFFULL:
+	i = 10;
+	break;
+
+    case 0x100000000000ULL ... 0xFFFFFFFFFFFFULL:
+	i = 11;
+	break;
+
+    case 0x1000000000000ULL ... 0xFFFFFFFFFFFFFULL:
+	i = 12;
+	break;
+
+    case 0x10000000000000ULL ... 0xFFFFFFFFFFFFFFULL:
+	i = 13;
+	break;
+
+    case 0x100000000000000ULL ... 0xFFFFFFFFFFFFFFFULL:
+	i = 14;
+	break;
+
+    case 0x1000000000000000ULL ... 0xFFFFFFFFFFFFFFFFULL:
+	i = 15;
+	break;
+    }
+    if (i + 2 > size) // (i + 1) + '\0'
+	return 0;  // too long
+    res = dst + i + 1;
+    *res = '\0';
+    for (; i >= 0; i--) {
+	dst[i] = "0123456789ABCDEF"[n & 15];
+	n >>= 4;
+    }
+    return res - dst;
+}
+
+/*
  * copies at most <size-1> chars from <src> to <dst>. Last char is always
  * set to 0, unless <size> is 0. The number of chars copied is returned
  * (excluding the terminating zero).
@@ -2300,7 +2484,9 @@ static inline void srv_return_page(struct session *t) {
 	    hlen += 28;
 	}
 	else if (t->req_bodylen || (t->ka & 1)) {
-	    hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "Content-length: %lld\r\n", (t->req_bodylen > 0) ? t->req_bodylen : t->req_size);
+	    memcpy(t->rep->data + hlen, "Content-length: ", 16); hlen += 16;
+	    hlen += ulltoa((t->req_bodylen > 0) ? t->req_bodylen : t->req_size, t->rep->data + hlen, BUFSIZE - hlen);
+	    memcpy(t->rep->data + hlen, "\r\n", 2); hlen += 2;
 	}
 
 	if (!t->req_cache) {
@@ -2308,18 +2494,51 @@ static inline void srv_return_page(struct session *t) {
 	    hlen += 25;
 	}
 
-	if (t->etag)
-	    hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen, "Etag: %08x\r\n", t->etag);
+	if (t->etag) {
+	    memcpy(t->rep->data + hlen, "Etag: ", 6); hlen += 6;
+	    hlen += ulltox(t->etag, t->rep->data + hlen, BUFSIZE - hlen);
+	    memcpy(t->rep->data + hlen, "\r\n", 2); hlen += 2;
+	}
 
-	hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen,
-			 "X-req: size=%ld, time=%ld ms\r\n"
-			 "X-rsp: id=%s, code=%d, cache=%d,%s size=%lld, time=%d ms (%ld real)\r\n"
-			 "\r\n",
-			 (long)t->req->total, t->logs.t_request,
-			 srv->id, t->req_code, t->req_cache,
-			 t->req_chunked ? " chunked," : "",
-			 t->req_size, t->req_time,
-			 t->logs.t_queue - t->logs.t_request);
+	memcpy(t->rep->data + hlen, "X-req: size=", 12); hlen += 12;
+	hlen += ulltoa(t->req->total, t->rep->data + hlen, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, ", time=", 7); hlen += 7;
+	hlen += ulltoa(t->logs.t_request, t->rep->data + hlen, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, "\r\nX-rsp: id=", 12); hlen += 12;
+	hlen += strlcpy2(t->rep->data + hlen, srv->id, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, ", code=", 7); hlen += 7;
+	hlen += ulltoa(t->req_code, t->rep->data + hlen, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, ", cache=", 8); hlen += 8;
+	t->rep->data[hlen++] = '0' + !!t->req_cache;
+
+	if (t->req_chunked) {
+	    memcpy(t->rep->data + hlen, ", chunked", 9); hlen += 9;
+	}
+
+	memcpy(t->rep->data + hlen, ", size=", 7); hlen += 7;
+	hlen += ulltoa(t->req_size, t->rep->data + hlen, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, ", time=", 7); hlen += 7;
+	hlen += ulltoa(t->req_time, t->rep->data + hlen, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, " ms (", 5); hlen += 5;
+	hlen += ulltoa(t->logs.t_queue - t->logs.t_request, t->rep->data + hlen, BUFSIZE - hlen);
+
+	memcpy(t->rep->data + hlen, " real)\r\n\r\n", 10); hlen += 10;
+
+	//hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen,
+	//		 "X-req: size=%ld, time=%ld ms\r\n"
+	//		 "X-rsp: id=%s, code=%d, cache=%d,%s size=%lld, time=%d ms (%ld real)\r\n"
+	//		 "\r\n",
+	//		 (long)t->req->total, t->logs.t_request,
+	//		 srv->id, t->req_code, t->req_cache,
+	//		 t->req_chunked ? " chunked," : "",
+	//		 t->req_size, t->req_time,
+	//		 t->logs.t_queue - t->logs.t_request);
 	t->to_write = t->req_size;
 	t->rep->l = hlen;
 	t->rep->r = t->rep->h = t->rep->lr = t->rep->w = t->rep->data;
