@@ -2694,6 +2694,10 @@ int process_cli(struct session *t) {
 	    }
 
 	    /* WARNING: ptr is not valid anymore, since the header may have been deleted or truncated ! */
+	    if (req->lr >= req->data + BUFSIZE - 1) {
+		/* the request is too large, cannot parse it */
+		goto terminate_client;
+	    }
 	    req->h = req->lr;
 	} /* while (req->lr < req->r) */
 
