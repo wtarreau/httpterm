@@ -2907,7 +2907,8 @@ int process_cli(struct session *t) {
 	    else {
 		/* headers */
 		if (!(t->ka & 2) &&  // keep-alive/close not forced
-		    strncasecmp(req->h, "connection:", 11) == 0) {
+		    (ntohl(read_u32(req->h)) | 0x20202020) == 0x636f6e6e && // conn
+		    strncasecmp(req->h + 4, "ection:", 7) == 0) {
 		    char *p = req->h + 12;
 
 		    while (p < req->lr && (*p == ' ' || *p == '\t'))
@@ -2917,7 +2918,9 @@ int process_cli(struct session *t) {
 		    else if (*p == 'k' || *p == 'K') // keep-alive
 			t->ka = (t->ka & 4) | 1;
 		}
-		else if (!t->req_body && strncasecmp(req->h, "content-length:", 15) == 0) {
+		else if (!t->req_body &&
+			 (ntohl(read_u32(req->h)) | 0x20202020) == 0x636f6e74 && // cont
+			 strncasecmp(req->h + 4, "ent-length:", 11) == 0) {
 		    char *p = req->h + 16;
 
 		    while (p < req->lr && (*p == ' ' || *p == '\t'))
@@ -2930,7 +2933,8 @@ int process_cli(struct session *t) {
 		    if (t->req_maxbody >= 0 && (long long)t->req_maxbody < t->req_body)
 			    t->req_body = t->req_maxbody;
 		}
-		else if (strncasecmp(req->h, "expect:", 7) == 0) {
+		else if ((ntohl(read_u32(req->h)) | 0x20202020) == 0x65787065 && // expe
+			 strncasecmp(req->h + 4, "ct:", 3) == 0) {
 			expect = 1;
 		}
 	    }
