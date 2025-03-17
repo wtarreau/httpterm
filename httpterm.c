@@ -659,6 +659,7 @@ struct session {
     int req_random;
     int req_pieces;
     int req_meth;
+    int req_verbose;
 };
 
 struct listener {
@@ -896,6 +897,8 @@ const char *HTTP_HELP =
 	"                     E.g. /?B=10000\n"
 	" - /?t=<time>        wait <time> milliseconds before responding.\n"
 	"                     E.g. /?t=500 , /?t=10k for 10.24s , /?t=5000r for 0..5s\n"
+	" - /?v=<verbose>     emit X-req and X-rsp headers with extra info if non-zero.\n"
+	"                     E.g. /?V=1\n"
 	" - /?w=<time>        use keep-alive time <time> milliseconds.\n"
 	"                     E.g. /?w=1000\n"
 	" - /?P=<time>        pause <time> milliseconds after responding (may delay close).\n"
@@ -2253,6 +2256,7 @@ int event_accept(int fd) {
 	s->req_pieces = 0;
 	s->req_bodylen = -1; // default: advertise the correct size
 	s->req_maxbody = -1;
+	s->req_verbose = 0;
 
 	s->logs.tv_accept = now;
 	s->logs.t_request = -1;
@@ -2500,35 +2504,39 @@ static inline void srv_return_page(struct session *t) {
 	    memcpy(t->rep->data + hlen, "\r\n", 2); hlen += 2;
 	}
 
-	memcpy(t->rep->data + hlen, "X-req: size=", 12); hlen += 12;
-	hlen += ulltoa(t->req->total, t->rep->data + hlen, BUFSIZE - hlen);
+	if (t->req_verbose) {
+	    memcpy(t->rep->data + hlen, "X-req: size=", 12); hlen += 12;
+	    hlen += ulltoa(t->req->total, t->rep->data + hlen, BUFSIZE - hlen);
 
-	memcpy(t->rep->data + hlen, ", time=", 7); hlen += 7;
-	hlen += ulltoa(t->logs.t_request, t->rep->data + hlen, BUFSIZE - hlen);
+	    memcpy(t->rep->data + hlen, ", time=", 7); hlen += 7;
+	    hlen += ulltoa(t->logs.t_request, t->rep->data + hlen, BUFSIZE - hlen);
 
-	memcpy(t->rep->data + hlen, "\r\nX-rsp: id=", 12); hlen += 12;
-	hlen += strlcpy2(t->rep->data + hlen, srv->id, BUFSIZE - hlen);
+	    memcpy(t->rep->data + hlen, "\r\nX-rsp: id=", 12); hlen += 12;
+	    hlen += strlcpy2(t->rep->data + hlen, srv->id, BUFSIZE - hlen);
 
-	memcpy(t->rep->data + hlen, ", code=", 7); hlen += 7;
-	hlen += ulltoa(t->req_code, t->rep->data + hlen, BUFSIZE - hlen);
+	    memcpy(t->rep->data + hlen, ", code=", 7); hlen += 7;
+	    hlen += ulltoa(t->req_code, t->rep->data + hlen, BUFSIZE - hlen);
 
-	memcpy(t->rep->data + hlen, ", cache=", 8); hlen += 8;
-	t->rep->data[hlen++] = '0' + !!t->req_cache;
+	    memcpy(t->rep->data + hlen, ", cache=", 8); hlen += 8;
+	    t->rep->data[hlen++] = '0' + !!t->req_cache;
 
-	if (t->req_chunked) {
-	    memcpy(t->rep->data + hlen, ", chunked", 9); hlen += 9;
+	    if (t->req_chunked) {
+		memcpy(t->rep->data + hlen, ", chunked", 9); hlen += 9;
+	    }
+
+	    memcpy(t->rep->data + hlen, ", size=", 7); hlen += 7;
+	    hlen += ulltoa(t->req_size, t->rep->data + hlen, BUFSIZE - hlen);
+
+	    memcpy(t->rep->data + hlen, ", time=", 7); hlen += 7;
+	    hlen += ulltoa(t->req_time, t->rep->data + hlen, BUFSIZE - hlen);
+
+	    memcpy(t->rep->data + hlen, " ms (", 5); hlen += 5;
+	    hlen += ulltoa(t->logs.t_queue - t->logs.t_request, t->rep->data + hlen, BUFSIZE - hlen);
+
+	    memcpy(t->rep->data + hlen, " real)\r\n", 8); hlen += 8;
 	}
-
-	memcpy(t->rep->data + hlen, ", size=", 7); hlen += 7;
-	hlen += ulltoa(t->req_size, t->rep->data + hlen, BUFSIZE - hlen);
-
-	memcpy(t->rep->data + hlen, ", time=", 7); hlen += 7;
-	hlen += ulltoa(t->req_time, t->rep->data + hlen, BUFSIZE - hlen);
-
-	memcpy(t->rep->data + hlen, " ms (", 5); hlen += 5;
-	hlen += ulltoa(t->logs.t_queue - t->logs.t_request, t->rep->data + hlen, BUFSIZE - hlen);
-
-	memcpy(t->rep->data + hlen, " real)\r\n\r\n", 10); hlen += 10;
+	/* final CRLF */
+	memcpy(t->rep->data + hlen, "\r\n", 2); hlen += 2;
 
 	//hlen += snprintf(t->rep->data + hlen, BUFSIZE - hlen,
 	//		 "X-req: size=%ld, time=%ld ms\r\n"
@@ -2826,6 +2834,9 @@ int process_cli(struct session *t) {
 				    t->req_nosplice = 1;
 				    setsockopt(t->cli_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof(one));
 				}
+				break;
+			    case 'v':
+				t->req_verbose = result;
 				break;
 			    }
 			    arg = next;
@@ -3140,6 +3151,7 @@ int process_cli(struct session *t) {
 			t->logs.tv_accept = now;
 			t->logs.t_request = -1;
 			t->logs.t_queue = -1;
+			t->req_verbose = 0;
 			if (wait_time)
 				tv_delayfrom(&t->crexpire, &now, wait_time);
 			goto loop;
