@@ -4731,8 +4731,9 @@ void init(int argc, char **argv) {
 	    if (limit.rlim_max == RLIM_INFINITY)
 		limit.rlim_max = limit.rlim_cur;
 
-	    if (limit.rlim_max > global.maxsock)
-		global.maxconn = limit.rlim_max - global.maxsock;
+	    global.maxconn = (limit.rlim_max > DEFAULT_MAXCONN) ?
+		DEFAULT_MAXCONN : limit.rlim_max;
+
 	}
 
 	if (!global.maxconn)
