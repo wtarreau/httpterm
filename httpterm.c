@@ -3374,11 +3374,11 @@ int epoll_loop(int action) {
 	  return 0;
       else {
 	  epoll_events = (struct epoll_event*)
-	      calloc(1, sizeof(struct epoll_event) * global.maxsock);
+	      calloc(global.maxsock, sizeof(struct epoll_event));
 	  PrevReadEvent = (fd_set *)
-	      calloc(1, sizeof(fd_set) * (global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE);
+	      calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
 	  PrevWriteEvent = (fd_set *)
-	      calloc(1, sizeof(fd_set) * (global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE);
+	      calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
       }
       return 1;
   }
@@ -3538,7 +3538,7 @@ int poll_loop(int action) {
 
   if (action == POLL_LOOP_ACTION_INIT) {
       poll_events = (struct pollfd*)
-	  calloc(1, sizeof(struct pollfd) * global.maxsock);
+	  calloc(global.maxsock, sizeof(struct pollfd));
       return 1;
   }
   else if (action == POLL_LOOP_ACTION_CLEAN) {
@@ -3647,9 +3647,9 @@ int select_loop(int action) {
 
   if (action == POLL_LOOP_ACTION_INIT) {
       ReadEvent = (fd_set *)
-	  calloc(1, sizeof(fd_set) * (global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE);
+	  calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
       WriteEvent = (fd_set *)
-	  calloc(1, sizeof(fd_set) * (global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE);
+	  calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
       return 1;
   }
   else if (action == POLL_LOOP_ACTION_CLEAN) {
@@ -4765,15 +4765,12 @@ void init(int argc, char **argv) {
     if (global.nbproc < 1)
 	global.nbproc = 1;
 
-    StaticReadEvent = (fd_set *)calloc(1,
-		sizeof(fd_set) *
-		(global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE);
-    StaticWriteEvent = (fd_set *)calloc(1,
-		sizeof(fd_set) *
-		(global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE);
+    StaticReadEvent = (fd_set *)calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE,
+		sizeof(fd_set));
+    StaticWriteEvent = (fd_set *)calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE,
+		sizeof(fd_set));
 
-    fdtab = (struct fdtab *)calloc(1,
-		sizeof(struct fdtab) * (global.maxsock));
+    fdtab = (struct fdtab *)calloc(global.maxsock, sizeof(struct fdtab));
     for (i = 0; i < global.maxsock; i++) {
 	fdtab[i].state = FD_STCLOSE;
     }
