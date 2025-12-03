@@ -4817,11 +4817,14 @@ int setup_splice(void)
 	int total, ret;
 
 	if (pipe(master_pipe) < 0) {
-	    Alert("Failed to create master pipe for splice\n");
-	    exit(1);
+	    Warning("Failed to create master pipe for splice.\n");
+	    goto fail;
 	}
 
-	fcntl(master_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4);
+	if (fcntl(master_pipe[0], F_SETPIPE_SZ, pipesize * 5 / 4) < 0) {
+	    Warning("Failed to change pipe size to %d. Check ulimit -p, fs.pipe-max-size and fs.pipe-user-pages-soft.\n", pipesize * 5 / 4);
+	    goto fail_close;
+	}
 
 	total = ret = 0;
 	do {
@@ -4833,8 +4836,8 @@ int setup_splice(void)
 	if (total < pipesize) {
 	    if (total < 60*1024) {
 		/* Older kernels were limited to around 60-61 kB */
-		Alert("Failed to vmsplice response buffer after %d bytes, retry with '-dS'\n", total);
-		exit(1);
+		Warning("Failed to vmsplice response buffer after %d bytes, retry with '-dS'\n", total);
+		goto fail_close;
 	    } else {
 		Warning("Splicing is limited to %d bytes (too old kernel), retry with '-dS'\n", total);
 		pipesize = total;
@@ -4842,6 +4845,13 @@ int setup_splice(void)
 	}
     }
     return 1;
+ fail_close:
+    close(master_pipe[0]);
+    close(master_pipe[1]);
+ fail:
+    Warning("Disabling splice().\n");
+    global.flags &= ~GFLAGS_NO_SPLICE;
+    return 0;
 }
 #endif
 
