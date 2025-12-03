@@ -3391,9 +3391,9 @@ int epoll_loop(int action) {
       return 1;
   }
   else if (action == POLL_LOOP_ACTION_CLEAN) {
-      if (PrevWriteEvent) free(PrevWriteEvent);
-      if (PrevReadEvent)  free(PrevReadEvent);
-      if (epoll_events)   free(epoll_events);
+      free(PrevWriteEvent);
+      free(PrevReadEvent);
+      free(epoll_events);
       close(epoll_fd);
       epoll_fd = 0;
       return 1;
@@ -3671,8 +3671,8 @@ int select_loop(int action) {
       return 1;
   }
   else if (action == POLL_LOOP_ACTION_CLEAN) {
-      if (WriteEvent)       free(WriteEvent);
-      if (ReadEvent)        free(ReadEvent);
+      free(WriteEvent);
+      free(ReadEvent);
       return 1;
   }
 
@@ -4001,13 +4001,13 @@ int cfg_parse_listen(const char *file, int linenum, char **args) {
     }
     else if (!strcmp(args[0], "defaults")) {  /* use this one to assign default values */
 	/* some variables may have already been initialized earlier */
-	if (defproxy.errmsg.msg400) free(defproxy.errmsg.msg400);
-	if (defproxy.errmsg.msg403) free(defproxy.errmsg.msg403);
-	if (defproxy.errmsg.msg408) free(defproxy.errmsg.msg408);
-	if (defproxy.errmsg.msg500) free(defproxy.errmsg.msg500);
-	if (defproxy.errmsg.msg502) free(defproxy.errmsg.msg502);
-	if (defproxy.errmsg.msg503) free(defproxy.errmsg.msg503);
-	if (defproxy.errmsg.msg504) free(defproxy.errmsg.msg504);
+	free(defproxy.errmsg.msg400);
+	free(defproxy.errmsg.msg403);
+	free(defproxy.errmsg.msg408);
+	free(defproxy.errmsg.msg500);
+	free(defproxy.errmsg.msg502);
+	free(defproxy.errmsg.msg503);
+	free(defproxy.errmsg.msg504);
 
 	init_default_instance();
 	curproxy = &defproxy;
@@ -4969,13 +4969,13 @@ void deinit(void) {
 
 	/* only strup if the user have set in config.
 	   When should we free it?!
-	   if (p->errmsg.msg400) free(p->errmsg.msg400);
-	   if (p->errmsg.msg403) free(p->errmsg.msg403);
-	   if (p->errmsg.msg408) free(p->errmsg.msg408);
-	   if (p->errmsg.msg500) free(p->errmsg.msg500);
-	   if (p->errmsg.msg502) free(p->errmsg.msg502);
-	   if (p->errmsg.msg503) free(p->errmsg.msg503);
-	   if (p->errmsg.msg504) free(p->errmsg.msg504);
+	   free(p->errmsg.msg400);
+	   free(p->errmsg.msg403);
+	   free(p->errmsg.msg408);
+	   free(p->errmsg.msg500);
+	   free(p->errmsg.msg502);
+	   free(p->errmsg.msg503);
+	   free(p->errmsg.msg504);
 	*/
 
 	s = p->srv;
@@ -4998,12 +4998,11 @@ void deinit(void) {
 	p = p->next;
     }/* end while(p) */
     
-    if (global.chroot)    free(global.chroot);
-    if (global.pidfile)   free(global.pidfile);
-    
-    if (StaticReadEvent)  free(StaticReadEvent);
-    if (StaticWriteEvent) free(StaticWriteEvent);
-    if (fdtab)            free(fdtab);
+    free(global.chroot);
+    free(global.pidfile);
+    free(StaticReadEvent);
+    free(StaticWriteEvent);
+    free(fdtab);
     
     pool_destroy(pool_session);
     pool_destroy(pool_buffer);
