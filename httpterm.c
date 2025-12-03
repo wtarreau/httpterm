@@ -2636,10 +2636,11 @@ int process_cli(struct session *t) {
 		    /* now we know that *ptr is either \r or \n,
 		     * and that there are at least 1 char after it.
 		     */
-		    if ((ptr[0] == ptr[1]) || (ptr[1] != '\r' && ptr[1] != '\n'))
-			req->lr = ptr + 1; /* \r\r, \n\n, \r[^\n], \n[^\r] */
+		    if (ptr[0] == '\r')
+			req->lr = ptr + 2;
 		    else
-			req->lr = ptr + 2; /* \r\n or \n\r */
+			req->lr = ptr + 1;
+
 		    /* ignore empty leading lines */
 		    buffer_replace2(req, req->h, req->lr, NULL, 0);
 		    req->h = req->lr;
@@ -2649,10 +2650,10 @@ int process_cli(struct session *t) {
 	    end_of_request:
 		/* skip empty header */
 		ptr = req->h;
-		if ((ptr[0] == ptr[1]) || (ptr[1] != '\r' && ptr[1] != '\n'))
-		    req->lr = ptr + 1; /* \r\r, \n\n, \r[^\n], \n[^\r] */
+		if (ptr[0] == '\r')
+		    req->lr = ptr + 2;
 		else
-		    req->lr = ptr + 2; /* \r\n or \n\r */
+		    req->lr = ptr + 1;
 
 		/* consume the header block */
 		req->w = req->lr;
@@ -2720,10 +2721,10 @@ int process_cli(struct session *t) {
 	    /* now we know that *ptr is either \r or \n,
 	     * and that there are at least 1 char after it.
 	     */
-	    if ((ptr[0] == ptr[1]) || (ptr[1] != '\r' && ptr[1] != '\n'))
-		req->lr = ptr + 1; /* \r\r, \n\n, \r[^\n], \n[^\r] */
+	    if (ptr[0] == '\r')
+		req->lr = ptr + 2;
 	    else
-		req->lr = ptr + 2; /* \r\n or \n\r */
+		req->lr = ptr + 1;
 
 	    if ((global.mode & MODE_DEBUG) && (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE))) {
 		int len, max;
