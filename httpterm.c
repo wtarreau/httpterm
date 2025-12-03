@@ -175,7 +175,7 @@ static _syscall4(long, tee, int, fd_in, int, fd_out, size_t, len, unsigned int, 
  * command-line '-n' argument.
  */
 #ifndef SYSTEM_MAXCONN
-#define DEFAULT_MAXCONN	2000
+#define DEFAULT_MAXCONN	1048576
 #else
 #define DEFAULT_MAXCONN	SYSTEM_MAXCONN
 #endif
