@@ -3379,6 +3379,14 @@ int epoll_loop(int action) {
 	      calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
 	  PrevWriteEvent = (fd_set *)
 	      calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
+
+	  if (!epoll_events || !PrevReadEvent || !PrevWriteEvent) {
+	      free(epoll_events);
+	      free(PrevReadEvent);
+	      free(PrevWriteEvent);
+	      Warning("Out of memory when allocating FD structs for epoll(). Check 'ulimit -Hn' or lower the limit using '-n' argument. Currently attempted limit was %d.\n", global.maxsock);
+	      return 0;
+	  }
       }
       return 1;
   }
@@ -3539,6 +3547,10 @@ int poll_loop(int action) {
   if (action == POLL_LOOP_ACTION_INIT) {
       poll_events = (struct pollfd*)
 	  calloc(global.maxsock, sizeof(struct pollfd));
+      if (!poll_events) {
+	  Warning("Out of memory when allocating FD structs for poll(). Check 'ulimit -Hn' or lower the limit using '-n' argument. Currently attempted limit was %d.\n", global.maxsock);
+	  return 0;
+      }
       return 1;
   }
   else if (action == POLL_LOOP_ACTION_CLEAN) {
@@ -3650,6 +3662,12 @@ int select_loop(int action) {
 	  calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
       WriteEvent = (fd_set *)
 	  calloc((global.maxsock + FD_SETSIZE - 1) / FD_SETSIZE, sizeof(fd_set));
+      if (!ReadEvent || !WriteEvent) {
+	  free(ReadEvent);
+	  free(WriteEvent);
+	  Warning("Out of memory when allocating FD structs for select(). Check 'ulimit -Hn' or lower the limit using '-n' argument. Currently attempted limit was %d.\n", global.maxsock);
+	  return 0;
+      }
       return 1;
   }
   else if (action == POLL_LOOP_ACTION_CLEAN) {
@@ -4771,6 +4789,14 @@ void init(int argc, char **argv) {
 		sizeof(fd_set));
 
     fdtab = (struct fdtab *)calloc(global.maxsock, sizeof(struct fdtab));
+    if (!StaticReadEvent || !StaticWriteEvent || !fdtab) {
+	free(StaticReadEvent);
+	free(StaticWriteEvent);
+	free(fdtab);
+	Alert("Out of memory when allocating FD structs. Check 'ulimit -Hn' or lower the limit using '-n' argument. Currently attempted limit was %d.\n", global.maxsock);
+	exit(1);
+    }
+
     for (i = 0; i < global.maxsock; i++) {
 	fdtab[i].state = FD_STCLOSE;
     }
@@ -5178,6 +5204,10 @@ int main(int argc, char **argv) {
 	    select_loop(POLL_LOOP_ACTION_RUN);
 	    select_loop(POLL_LOOP_ACTION_CLEAN);
 	    cfg_polling_mechanism &= POLL_USE_SELECT;
+	}
+	else {
+	    Alert("Unable to initialize any polling loop. This is likely due to an out of memory condition when allocating FD structs. Check 'ulimit -Hn' or lower the limit using '-n' argument. Currently attempted limit was %d.\n", global.maxsock);
+	    exit(1);
 	}
     }
 
