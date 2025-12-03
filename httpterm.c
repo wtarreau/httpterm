@@ -927,6 +927,7 @@ int event_accept(int fd);
 int event_cli_read(int fd);
 int event_cli_write(int fd);
 int process_session(struct task *t);
+int setup_splice(void);
 
 /*********************************************************************/
 /*  general purpose functions  ***************************************/
@@ -4802,6 +4803,14 @@ void init(int argc, char **argv) {
     }
 
 #ifdef ENABLE_SPLICE
+    setup_splice();
+#endif
+}
+
+#ifdef ENABLE_SPLICE
+/* check for splice support, disables it if not functional. Returns non-zero on success. */
+int setup_splice(void)
+{
     if (!(global.flags & GFLAGS_NO_SPLICE)) {
 	struct iovec v = { .iov_base = common_response,
 			   .iov_len = sizeof(common_response) };
@@ -4832,8 +4841,9 @@ void init(int argc, char **argv) {
 	    }
 	}
     }
-#endif
+    return 1;
 }
+#endif
 
 /*
  * this function starts all the proxies. Its return value is composed from
