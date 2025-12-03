@@ -990,21 +990,15 @@ void usage(char *name) {
 
 
 /*
- * Displays the message on stderr with the date and pid. Overrides the quiet
+ * Displays the message on stderr with the worker# and pid. Overrides the quiet
  * mode during startup.
  */
 void Alert(char *fmt, ...) {
     va_list argp;
-    struct timeval tv;
-    struct tm *tm;
 
     if (!(global.mode & MODE_QUIET) || (global.mode & (MODE_VERBOSE | MODE_STARTING))) {
 	va_start(argp, fmt);
-
-	gettimeofday(&tv, NULL);
-	tm=localtime(&tv.tv_sec);
-	fprintf(stderr, "[ALERT] %03d/%02d%02d%02d (%d) : ",
-		tm->tm_yday, tm->tm_hour, tm->tm_min, tm->tm_sec, (int)getpid());
+	fprintf(stderr, "[ALERT] worker %d/%d (%d) : ", worker_num + 1, cfg_workers, (int)getpid());
 	vfprintf(stderr, fmt, argp);
 	fflush(stderr);
 	va_end(argp);
@@ -1013,20 +1007,14 @@ void Alert(char *fmt, ...) {
 
 
 /*
- * Displays the message on stderr with the date and pid.
+ * Displays the message on stderr with the worker# and pid.
  */
 void Warning(char *fmt, ...) {
     va_list argp;
-    struct timeval tv;
-    struct tm *tm;
 
     if (!(global.mode & MODE_QUIET) || (global.mode & (MODE_VERBOSE | MODE_STARTING))) {
 	va_start(argp, fmt);
-
-	gettimeofday(&tv, NULL);
-	tm=localtime(&tv.tv_sec);
-	fprintf(stderr, "[WARNING] %03d/%02d%02d%02d (%d) : ",
-		tm->tm_yday, tm->tm_hour, tm->tm_min, tm->tm_sec, (int)getpid());
+	fprintf(stderr, "[WARNING] worker %d/%d (%d) : ", worker_num + 1, cfg_workers, (int)getpid());
 	vfprintf(stderr, fmt, argp);
 	fflush(stderr);
 	va_end(argp);
@@ -4791,6 +4779,8 @@ void init(int argc, char **argv) {
 		break;
 	}
     }
+    else
+	cfg_workers = 1;
 
     global.maxsock = 10; /* reserve 10 fds ; will be incremented by socket eaters */
     if (readcfgfile(cfg_cfgfile) < 0) {
