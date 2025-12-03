@@ -420,6 +420,17 @@ int ulltox(unsigned long long n, char *dst, size_t size)
     return res - dst;
 }
 
+/* Simple popcountl implementation. It returns the number of ones in a word.
+ * Described here : https://graphics.stanford.edu/~seander/bithacks.html
+ */
+static inline unsigned int my_popcountl(unsigned long a)
+{
+    a = a - ((a >> 1) & ~0UL/3);
+    a = (a & ~0UL/15*3) + ((a >> 2) & ~0UL/15*3);
+    a = (a + (a >> 4)) & ~0UL/255*15;
+    return (unsigned long)(a * (~0UL/255)) >> (sizeof(unsigned long) - 1) * 8;
+}
+
 /*
  * copies at most <size-1> chars from <src> to <dst>. Last char is always
  * set to 0, unless <size> is 0. The number of chars copied is returned
@@ -727,6 +738,8 @@ struct pipe {
 /*********************************************************************/
 
 int cfg_maxconn = 0;		/* # of simultaneous connections, (-n) */
+int cfg_workers = 1;		/* # of workers to fork; 0=auto. */
+int worker_num = 0;		/* number of the current worker, starts at 0 */
 int cfg_sndbuf = 0;             /* socket send buffer size in bytes (-B) */
 char *cfg_cfgfile = NULL;	/* configuration file */
 char *progname = NULL;		/* program name */
@@ -949,7 +962,8 @@ void usage(char *name) {
 	    "        -v displays version\n"
 	    "        -d enters debug mode ; -db only disables background mode.\n"
 	    "        -V enters verbose mode (disables quiet mode)\n"
-	    "        -D goes daemon ; implies -q\n"
+	    "        -D goes daemon ; implies -q; -Da=-D -a; -DaL=-D -a -L\n"
+	    "        -a automatically create one worker per CPU with -D -L\n"
 	    "        -q quiet mode : don't display messages\n"
 	    "        -c check mode : only check config file and exit\n"
 	    "        -n sets the maximum total # of connections (def: ulimit -Hn)\n"
@@ -4544,6 +4558,48 @@ int readcfgfile(char *file) {
 	return 0;
 }
 
+int count_workers(void)
+{
+    char buf[1024];
+    char *p, *next;
+    int totcpus = 0;
+    FILE *f;
+
+    f = fopen("/proc/self/status", "r");
+    if (!f)
+	return 0;
+
+    /* look for "Cpus_allowed:" */
+    do {
+	if (fgets(buf, sizeof(buf), f) == NULL)
+	    goto end;
+    } while (strncmp(buf, "Cpus_allowed:", 13) != 0);
+
+    /* found! */
+    p = buf + 13;
+    while (*p && (*p < '0' || *p > '9') && (*p < 'a' || *p > 'f'))
+	p++;
+
+    /* format: mask,mask,mask... */
+    while (1) {
+	unsigned long mask = strtoul(p, &next, 16);
+
+	if (next == p)
+	    break;
+
+	if (*next == 0 || *next == '\n' || *next == ',')
+	    totcpus += my_popcountl(mask);
+
+	if (*next != ',')
+	    break;
+	p = next + 1;
+    }
+
+ end:
+    fclose(f);
+    return totcpus;
+}
+
 #ifdef ENABLE_SPLICE
 void init_splice()
 {
@@ -4659,14 +4715,26 @@ void init(int argc, char **argv) {
 #endif
 	    else if (*flag == 'V')
 		arg_mode |= MODE_VERBOSE;
+	    else if (*flag == 'a')
+		cfg_workers = 0; // set workers to auto
 	    else if (*flag == 'd' && flag[1] == 'b')
 		arg_mode |= MODE_FOREGROUND;
 	    else if (*flag == 'd')
 		arg_mode |= MODE_DEBUG;
 	    else if (*flag == 'c')
 		arg_mode |= MODE_CHECK;
-	    else if (*flag == 'D')
+	    else if (*flag == 'D') {
 		arg_mode |= MODE_DAEMON | MODE_QUIET;
+		if (flag[1] == 'a') {
+		    cfg_workers = 0; // set workers to auto
+		    if (flag[2] == 'L') {
+			argv++; argc--; // "-DaL" for "-D -a -L
+			if (argc == 0)
+			    usage(old_argv);
+			cmdline_listen = *argv;
+		    }
+		}
+	    }
 	    else if (*flag == 'q')
 		arg_mode |= MODE_QUIET;
 	    else { /* >=2 args */
@@ -4702,6 +4770,27 @@ void init(int argc, char **argv) {
 	usage(old_argv);
 
     gethostname(hostname, MAX_HOSTNAME_LEN);
+
+    if ((global.mode & MODE_DAEMON) && cmdline_listen && cfg_workers == 0) {
+	/* automatic number of workers in daemon mode with dummy listener,
+	 * we can automatically spawn as many of them as we have CPUs. This
+	 * differs from nbproc because we fork before binding in order to
+	 * benefit from SO_REUSEPORT. The downside is that errors can be
+	 * extremely verbose. We ignore all this if we can't count the number.
+	 */
+	cfg_workers = count_workers();
+
+	/* the parent launches the required number of extra processes */
+	for (worker_num = 0; worker_num < cfg_workers - 1; worker_num++) {
+	    int ret = fork();
+	    if (ret < 0) {
+		Alert("[%s.main()] Cannot fork worker %d/%d.\n", argv[0], worker_num + 1, cfg_workers);
+		exit(1); /* there has been an error */
+	    }
+	    else if (ret == 0) /* child breaks here */
+		break;
+	}
+    }
 
     global.maxsock = 10; /* reserve 10 fds ; will be incremented by socket eaters */
     if (readcfgfile(cfg_cfgfile) < 0) {
