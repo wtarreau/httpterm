@@ -58,11 +58,14 @@ LIBS.freebsd =
 COPTS.default = -DENABLE_POLL
 LIBS.default =
 
+# default optimmizations
+OPT_CFLAGS = -O2
+
 # CPU dependant optimizations
-COPTS.generic = -O2 -fwrapv
-COPTS.i586 = -O2 -march=i586
-COPTS.i686 = -O2 -march=i686
-COPTS.ultrasparc = -O6 -mcpu=v9 -mtune=ultrasparc
+COPTS.generic = $(OPT_CFLAGS) -fwrapv
+COPTS.i586 = $(OPT_CFLAGS) -fwrapv -march=i586
+COPTS.i686 = $(OPT_CFLAGS) -fwrapv -march=i686
+COPTS.ultrasparc = $(OPT_CFLAGS) -fwrapv -mcpu=v9 -mtune=ultrasparc
 
 # options for standard library
 COPTS.libc=
