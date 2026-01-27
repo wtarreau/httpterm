@@ -1795,9 +1795,21 @@ int event_cli_read(int fd) {
 		    /* drain body data */
 		    if (s->req_body) {
 			if (s->req_body > (long long)b->l) {
+			    int drain = 0;
+
 			    s->req_body -= b->l;
 			    b->r = b->w = b->lr = b->data;
 			    b->l = 0;
+
+			    if (s->req_body) {
+				/* try to optimize draining of input in large chunks */
+#if defined(__linux__)
+				drain = recv(s->cli_fd, NULL, s->req_body, MSG_NOSIGNAL | MSG_TRUNC);
+#endif
+
+				if (drain > 0)
+				    s->req_body -= drain;
+			    }
 			} else {
 			    b->l -= s->req_body;
 			    b->w += s->req_body;
@@ -3021,10 +3033,24 @@ int process_cli(struct session *t) {
     consume_body:
 	extra = req->l;
 	if (t->req_maxbody > (long long)extra) {
+	    int drain = 0;
+
 	    t->req_maxbody -= extra;
 	    t->req_body -= extra;
 	    req->lr = req->r = req->w = req->data;
 	    req->l = 0;
+
+	    /* try to optimize draining of input in large chunks */
+#if defined(__linux__)
+	    drain = recv(t->cli_fd, NULL, t->req_body, MSG_NOSIGNAL | MSG_TRUNC);
+#endif
+	    if (drain > 0) {
+		t->req_body -= drain;
+		t->req_maxbody -= drain;
+		if (!t->req_body)
+		    goto end_of_request_body;
+	    }
+
 	    /* continue to read */
 	    my_fd_set(t->cli_fd, StaticReadEvent);
 	    if (t->proxy->clitimeout)
